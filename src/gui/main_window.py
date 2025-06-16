@@ -12,6 +12,7 @@ from PyQt6.QtGui import QFont, QAction
 import logging
 import time
 import hashlib
+import os
 
 from src.core.universal_loader import UniversalLoader
 from src.core.disassembler import DisassemblerEngine, Architecture
@@ -337,6 +338,23 @@ class MainWindow(QMainWindow):
         main_splitter.setSizes([300, 800, 500])
         main_layout.addWidget(main_splitter)
 
+    def download_log_file(self):
+        """Download the contents of the log view to a file chosen by the user."""
+        try:
+            file_path, _ = QFileDialog.getSaveFileName(self, "Save Log File", f"log_{time.strftime('%Y%m%d_%H%M%S')}.txt", "Text Files (*.txt)")
+            if file_path:
+                log_text = self.log_view.toPlainText()
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(log_text)
+                self.log_view.append(f"[INFO] Log file saved to {file_path}")
+                # Try to open the file automatically for user
+                try:
+                    os.startfile(file_path)
+                except Exception:
+                    pass
+        except Exception as e:
+            self.log_view.append(f"[ERROR] Failed to save log file: {e}")
+
     def create_center_panel(self):
         center_widget = QWidget()
         layout = QVBoxLayout(center_widget)
@@ -356,11 +374,19 @@ class MainWindow(QMainWindow):
         self.source_code_view.setFont(QFont("Consolas", 9))
         self.analysis_tabs.addTab(self.source_code_view, "Source Code")
 
-        # Pseudocode tab
+        # --- Pseudocode tab with toggle ---
+        from src.gui.pseudocode_toggle_widget import PseudocodeToggleWidget
+        self.pseudocode_tab_widget = QWidget()
+        pseudo_layout = QVBoxLayout(self.pseudocode_tab_widget)
+        self.pseudocode_toggle = PseudocodeToggleWidget()
+        pseudo_layout.addWidget(self.pseudocode_toggle)
         self.pseudocode_view = QTextEdit()
         self.pseudocode_view.setReadOnly(True)
         self.pseudocode_view.setFont(QFont("Consolas", 9))
-        self.analysis_tabs.addTab(self.pseudocode_view, "Pseudocode")
+        pseudo_layout.addWidget(self.pseudocode_view)
+        self.analysis_tabs.addTab(self.pseudocode_tab_widget, "Pseudocode")
+        self.pseudocode_toggle.toggle_changed.connect(self.update_pseudocode_tab)
+        # --- End Pseudocode tab with toggle ---
 
         # AI Analysis Panel
         self.ai_analysis_panel = AIAnalysisPanel()
@@ -425,12 +451,19 @@ class MainWindow(QMainWindow):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setFont(QFont("Consolas", 8))
-        self.analysis_tabs.addTab(self.log_view, "Analysis Log")
+        # Add download button below log view
+        log_tab_widget = QWidget()
+        log_tab_layout = QVBoxLayout(log_tab_widget)
+        log_tab_layout.addWidget(self.log_view)
+        self.download_log_btn = QPushButton("Download Log File")
+        log_tab_layout.addWidget(self.download_log_btn)
+        self.download_log_btn.clicked.connect(self.download_log_file)
+        self.analysis_tabs.addTab(log_tab_widget, "Analysis Log")
         
         layout.addWidget(self.analysis_tabs)
         return center_widget
 
-    def on_model_changed(self, index):
+    def on_model_changed(self):
         """Handle AI model selection change from the combo box."""
         model_type_map = {
             0: "ollama",
@@ -587,13 +620,38 @@ class MainWindow(QMainWindow):
             self.log_view.append(f"[ERROR] Failed to show CFG: {e}")
 
     def update_pseudocode_tab(self):
-        """Refresh the pseudocode tab using MultiArchDisassembler."""
+        """Refresh the pseudocode tab using offline or AI pseudocode based on toggle."""
         try:
-            from src.core.multiarch_disassembler import MultiArchDisassembler
-            mad = MultiArchDisassembler(self.current_file_path)
-            mad.load()
-            pseudo = mad.to_pseudocode()
-            self.pseudocode_view.setPlainText(pseudo)
+            if hasattr(self, 'pseudocode_toggle') and self.pseudocode_toggle.toggle.isChecked():
+                # AI pseudocode
+                from src.core.ai_decompiler import AIDecompiler
+                from src.core.multiarch_disassembler import MultiArchDisassembler
+                if not self.current_file_path:
+                    self.pseudocode_view.setPlainText("[ERROR] No file loaded for AI pseudocode.")
+                    return
+                mad = MultiArchDisassembler(self.current_file_path)
+                mad.load()
+                instructions = mad.instructions if hasattr(mad, 'instructions') else None
+                if not instructions:
+                    self.pseudocode_view.setPlainText("[ERROR] No instructions for AI pseudocode.")
+                    return
+                # Convert instructions to assembly string
+                assembly_code = "\n".join([
+                    f"{instr['mnemonic']} {instr['op_str']}".strip()
+                    for instr in instructions
+                ])
+                ai_decompiler = getattr(self, 'ai_decompiler', None)
+                if not ai_decompiler:
+                    ai_decompiler = AIDecompiler(model_type="ollama")
+                pseudo = ai_decompiler.decompile_assembly(assembly_code)
+                self.pseudocode_view.setPlainText(pseudo)
+            else:
+                # Offline pseudocode
+                from src.core.multiarch_disassembler import MultiArchDisassembler
+                mad = MultiArchDisassembler(self.current_file_path)
+                mad.load()
+                pseudo = mad.to_pseudocode()
+                self.pseudocode_view.setPlainText(pseudo)
         except Exception as e:
             self.pseudocode_view.setPlainText(f"[ERROR] Could not generate pseudocode: {e}")
 
@@ -677,42 +735,65 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Decompilation Error", f"Full-binary decompilation failed: {e}")
 
     def on_decompile_complete(self, results):
-        # Update AI analysis panel with results
+        # Update AI analysis panel with results as before
         self.ai_analysis_panel.update_analysis_results(results)
-        # Automatically update the Source Code tab with high-level decompiled code
+        # Strictly use only offline (Ghidra/RetDec) results for Source Code tab
+        ghidra_result = results.get('ghidra', {})
+        retdec_result = results.get('retdec', {})
         code = None
-        # Try consensus first
-        if 'consensus' in results and results['consensus']:
-            code = results['consensus']
-        # Fallback to LLM or any engine result
-        elif isinstance(results, dict):
-            for v in results.values():
-                if isinstance(v, dict) and v.get('success') and v.get('code'):
-                    code = v['code']
-                    break
-                elif isinstance(v, str) and v.strip():
-                    code = v
-                    break
-        # If code is empty or looks like a failed AI result, fall back to RetDec/Ghidra
-        if not code or 'decompilation failed' in code.lower() or 'error' in code.lower() or code.strip() == '':
-            self.log_view.append("[WARN] AI decompilation failed or incomplete. Falling back to RetDec/Ghidra.")
-            # Try RetDec first
-            retdec_result = self.decompiler_manager._run_retdec(self.current_file_path)
-            if retdec_result and 'error' not in retdec_result.lower() and 'failed' not in retdec_result.lower():
-                self.source_code_view.setPlainText(retdec_result)
-                self.log_view.append("[INFO] Source Code tab updated with RetDec C decompilation.")
-            else:
-                ghidra_result = self.decompiler_manager._run_ghidra(self.current_file_path)
-                if ghidra_result and 'error' not in ghidra_result.lower() and 'failed' not in ghidra_result.lower():
-                    self.source_code_view.setPlainText(ghidra_result)
-                    self.log_view.append("[INFO] Source Code tab updated with Ghidra C decompilation.")
-                else:
-                    self.source_code_view.setPlainText("[ERROR] All decompilation engines failed. Please check logs.")
-                    self.log_view.append("[ERROR] All decompilation engines failed.")
+        engine_used = None
+        # Prefer Ghidra, fallback to RetDec
+        if ghidra_result.get('success') and ghidra_result.get('code') and 'error' not in ghidra_result.get('code', '').lower() and 'failed' not in ghidra_result.get('code', '').lower():
+            code = ghidra_result['code']
+            engine_used = 'Ghidra'
+        elif retdec_result.get('success') and retdec_result.get('code') and 'error' not in retdec_result.get('code', '').lower() and 'failed' not in retdec_result.get('code', '').lower():
+            code = retdec_result['code']
+            engine_used = 'RetDec'
         else:
-            self.source_code_view.setPlainText(code)
-            self.log_view.append("[INFO] Source Code tab updated with AI decompilation.")
-        self.log_view.append("[INFO] Decompilation complete")
+            # Fallback: try running again directly in case results dict is missing
+            self.log_view.append("[WARN] Both Ghidra and RetDec results missing or failed in results dict. Running engines directly.")
+            ghidra_code = self.decompiler_manager._run_ghidra(self.current_file_path)
+            if ghidra_code and 'error' not in ghidra_code.lower() and 'failed' not in ghidra_code.lower():
+                code = ghidra_code
+                engine_used = 'Ghidra (direct)'
+            else:
+                retdec_code = self.decompiler_manager._run_retdec(self.current_file_path)
+                if retdec_code and 'error' not in retdec_code.lower() and 'failed' not in retdec_code.lower():
+                    code = retdec_code
+                    engine_used = 'RetDec (direct)'
+                else:
+                    code = "[ERROR] All offline decompilation engines failed. No C code available."
+                    engine_used = 'None'
+        # Chunked, non-blocking loading for very large code output
+        from PyQt6.QtCore import QTimer
+        self.source_code_view.clear()
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setMaximum(0)  # Indeterminate
+        code_lines = code.splitlines(keepends=True)
+        chunk_size = 5000
+        total_lines = len(code_lines)
+        self._source_code_chunk_index = 0
+        def append_next_chunk():
+            start = self._source_code_chunk_index
+            end = min(start + chunk_size, total_lines)
+            chunk = ''.join(code_lines[start:end])
+            self.source_code_view.moveCursor(self.source_code_view.textCursor().End)
+            self.source_code_view.insertPlainText(chunk)
+            self._source_code_chunk_index = end
+            if hasattr(self, 'progress_bar'):
+                self.progress_bar.setFormat(f"Loading C code: {end}/{total_lines} lines")
+            if end < total_lines:
+                QTimer.singleShot(10, append_next_chunk)
+            else:
+                if hasattr(self, 'progress_bar'):
+                    self.progress_bar.setVisible(False)
+        append_next_chunk()
+        if engine_used and engine_used != 'None':
+            self.log_view.append(f"[INFO] Source Code tab updated with {engine_used} C decompilation.")
+        else:
+            self.log_view.append("[ERROR] All offline decompilation engines failed. No C code available.")
+        self.log_view.append("[INFO] Decompilation complete (offline engines only for Source Code tab)")
 
     def setup_menu(self):
         menubar = self.menuBar()
@@ -912,10 +993,10 @@ class MainWindow(QMainWindow):
                 self.log_view.append("[ERROR] No code to summarize.")
                 return
             if model_name == "OpenAI GPT-4":
-                # WARNING: Hardcoded OpenAI API key for development/testing only. REMOVE BEFORE SHARING OR DEPLOYMENT.
                 api_key = self.api_key_edit.text().strip() if hasattr(self, 'api_key_edit') else ''
                 if not api_key:
-                    api_key = "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"
+                    self.log_view.append("[WARN] No OpenAI API key entered. Please provide your API key in the Settings tab.")
+                    return
                 assistant = AIAssistant(api_key=api_key, model="gpt-4")
                 prompt = f"Summarize the following decompiled function or code for a reverse engineer. Highlight its purpose, logic, and any security-relevant operations.\n\n{code}"
                 try:
