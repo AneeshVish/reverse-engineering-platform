@@ -72,8 +72,6 @@ The generated executable will be in the `dist/` folder.
 - Ollama must be running locally (`ollama serve`) to use local LLM features.
 - All major AI features are available from the AI Analysis Panel in the UI.
 
-## Security Warning
-**Never share or deploy the app with a hardcoded OpenAI API key.**
 
 ---
 
