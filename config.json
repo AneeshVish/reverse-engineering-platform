@@ -1,0 +1,30 @@
+{
+  "general": {
+    "theme": "dark",
+    "font_family": "Consolas",
+    "font_size": 9,
+    "auto_save": true
+  },
+  "directories": {
+    "plugin_dir": "plugins",
+    "project_dir": "projects",
+    "temp_dir": "temp"
+  },
+  "disassembly": {
+    "show_bytes": true,
+    "show_addresses": true,
+    "syntax_highlighting": true,
+    "auto_analyze": true
+  },
+  "debugger": {
+    "auto_attach": false,
+    "default_timeout": 30,
+    "log_api_calls": true
+  },
+  "ai": {
+    "enabled": false,
+    "api_key": "",
+    "model": "gpt-3.5-turbo",
+    "max_tokens": 1000
+  }
+}
