@@ -74,11 +74,16 @@ which backends are active.
   **File → Open Binary**. You get disassembly, a function list (double-click to
   navigate), control-flow graphs, entropy/sections, security audit, strings/keys,
   and decompiled C *when a decompiler backend is installed*.
-- **A whole app** (a folder, `.app` bundle, or extracted installer — apps are
-  usually *many* files): use the **Full Software** tab and point it at the folder.
-  It walks the entire tree, classifies every file, and produces an
+- **A whole app** (a folder, `.app` bundle, installer, **`.apk` / `.ipa` / `.jar`
+  / `.zip`** — apps are usually *many* files): use the **Full Software** tab and
+  point it at the folder or archive. It **recurses into archives** (even nested,
+  shown as `app.apk!/lib.jar!/...`), classifies every file, and produces an
   **application-wide summary** plus a per-file deep dive (format, sections,
-  functions, entropy/packing, and embedded-secret hits).
+  functions, entropy, **packer/protector detection**, and embedded-secret hits).
+- **Packing / protection:** known packers are detected (UPX, ASPack, VMProtect,
+  Themida, Enigma, MPRESS, …). **UPX is unpacked automatically**; for heavy
+  commercial protectors the tool tells you so honestly rather than pretending to
+  break them.
 
 **Honest scope:** like every RE tool (IDA, Ghidra, Binary Ninja), this recovers a
 faithful *structural* understanding — disassembly, control flow, and decompiled
