@@ -161,10 +161,24 @@ class BinaryAnalysisWorker(QThread):
                                 print(f"[DEBUG] Generated {len(instructions)} instructions")
             # For unsupported or raw files, we skip disassembly on purpose
 
+            # Best-effort function discovery from the parsed binary (LIEF).
+            functions = []
+            try:
+                if parsed is not None and hasattr(parsed, 'functions'):
+                    for fn in parsed.functions:
+                        addr = getattr(fn, 'address', 0) or 0
+                        name = getattr(fn, 'name', '') or f"sub_{addr:x}"
+                        if addr:
+                            functions.append({'name': name, 'address': int(addr)})
+                    functions.sort(key=lambda d: d['address'])
+            except Exception as fe:
+                print(f"[DEBUG] Function discovery failed: {fe}")
+
             self.analysis_complete.emit({
                 'binary_info': bin_info,
                 'instructions': instructions,
                 'sections': sections,
+                'functions': functions,
                 'file_path': self.file_path
             })
 
@@ -1061,13 +1075,48 @@ class MainWindow(QMainWindow):
         self.binary_info_tree.setHeaderLabels(["Section", "Address", "Size"])
         layout.addWidget(QLabel("Binary Sections:"))
         layout.addWidget(self.binary_info_tree)
-        
+
+        # Functions list (double-click to jump to the address in Disassembly).
+        self.functions_tree = QTreeWidget()
+        self.functions_tree.setHeaderLabels(["Function", "Address"])
+        self.functions_tree.itemDoubleClicked.connect(self.on_function_selected)
+        layout.addWidget(QLabel("Functions (double-click to navigate):"))
+        layout.addWidget(self.functions_tree)
+
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
         
         return left_widget
+
+    def on_function_selected(self, item, _column=0):
+        """Scroll the Disassembly view to the selected function's address."""
+        try:
+            addr_text = item.text(1)
+            addr = int(addr_text, 16)
+            from PyQt6.QtGui import QTextCursor
+            doc = self.disassembly_view
+            # Disassembly lines start with the 8-hex address; find that line.
+            target = f"{addr:08x}:"
+            text = doc.toPlainText()
+            idx = text.find(target)
+            if idx < 0:
+                # Try without zero-padding width assumption.
+                target2 = f"{addr:x}:"
+                idx = text.find(target2)
+            if idx >= 0:
+                cursor = doc.textCursor()
+                cursor.setPosition(idx)
+                doc.setTextCursor(cursor)
+                doc.ensureCursorVisible()
+                self.analysis_tabs.setCurrentWidget(self.disassembly_view)
+            else:
+                if hasattr(self, 'log_view'):
+                    self.log_view.append(f"[INFO] Address {addr_text} not in the disassembled range.")
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[WARN] Could not navigate to function: {e}")
 
     def show_cfg_viewer(self):
         """Show the control flow graph for the current disassembly."""
@@ -1397,6 +1446,18 @@ class MainWindow(QMainWindow):
                     hex(s.get('virtual_address', 0)),
                     str(s.get('size', 0)),
                 ])
+
+        # Populate the left-panel functions list (double-click navigates).
+        functions = results.get('functions', [])
+        if hasattr(self, 'functions_tree'):
+            self.functions_tree.clear()
+            for fn in functions:
+                QTreeWidgetItem(self.functions_tree, [
+                    str(fn.get('name', '')),
+                    f"{fn.get('address', 0):08x}",
+                ])
+            if hasattr(self, 'log_view') and functions:
+                self.log_view.append(f"[INFO] Discovered {len(functions)} functions.")
 
         # Only warn about packing when there is actual evidence (UPX sections or
         # very high section entropy) — not on every file.

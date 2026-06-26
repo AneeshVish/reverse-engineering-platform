@@ -104,6 +104,10 @@ def test_full_pipeline_builds_model(main_window):
     w.ai_decompile_cb.setChecked(False)   # don't spawn the AI worker
     w.on_analysis_complete(captured)
     assert w.program_model is not None
+    # Sections + functions lists should populate; function nav must not crash.
+    assert w.binary_info_tree.topLevelItemCount() > 0
+    if w.functions_tree.topLevelItemCount() > 0:
+        w.on_function_selected(w.functions_tree.topLevelItem(0))
 
 
 def test_handlers_do_not_crash(main_window):
