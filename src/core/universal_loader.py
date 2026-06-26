@@ -54,6 +54,13 @@ class UniversalLoader:
         if not path.exists():
             self.logger.error("File not found")
             return False
+        if path.is_dir():
+            # A directory (e.g. a macOS .app bundle) is not a single binary.
+            self.logger.error(f"Path is a directory, not a binary: {file_path}")
+            self.file_type = FileType.RAW
+            self.parsed = None
+            self.raw_data = None
+            return False
         try:
             with open(path, 'rb') as f:
                 try:

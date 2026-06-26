@@ -21,6 +21,28 @@ def test_source_secret_detection(tmp_path):
     assert not s.get("is_binary")
 
 
+def test_loader_rejects_directory(tmp_path):
+    from src.core.universal_loader import UniversalLoader
+    assert UniversalLoader().load(str(tmp_path)) is False
+
+
+def test_resolve_app_executable(tmp_path):
+    # Synthesize a minimal macOS .app bundle.
+    app = tmp_path / "Demo.app"
+    macos = app / "Contents" / "MacOS"
+    macos.mkdir(parents=True)
+    (macos / "Demo").write_bytes(b"\x7fELFexecutable")
+    import plistlib
+    with open(app / "Contents" / "Info.plist", "wb") as f:
+        plistlib.dump({"CFBundleExecutable": "Demo"}, f)
+    exe = ba.resolve_app_executable(str(app))
+    assert exe and exe.endswith("Contents/MacOS/Demo")
+
+
+def test_resolve_app_executable_non_app(tmp_path):
+    assert ba.resolve_app_executable(str(tmp_path)) is None
+
+
 def test_text_file_summary(tmp_path):
     p = tmp_path / "readme.txt"
     p.write_text("just text")

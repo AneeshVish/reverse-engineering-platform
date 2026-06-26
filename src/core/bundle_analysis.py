@@ -132,6 +132,36 @@ def render_summary(summary):
     return "\n".join(lines)
 
 
+def resolve_app_executable(app_path):
+    """For a macOS .app bundle (a directory), return its main executable path.
+
+    Reads Contents/Info.plist (CFBundleExecutable); falls back to the first file
+    in Contents/MacOS/. Returns None if it isn't a resolvable .app.
+    """
+    macos_dir = os.path.join(app_path, "Contents", "MacOS")
+    if not os.path.isdir(macos_dir):
+        return None
+    name = None
+    try:
+        import plistlib
+        with open(os.path.join(app_path, "Contents", "Info.plist"), "rb") as f:
+            name = plistlib.load(f).get("CFBundleExecutable")
+    except Exception:
+        name = None
+    if name:
+        exe = os.path.join(macos_dir, name)
+        if os.path.isfile(exe):
+            return exe
+    try:
+        for f in sorted(os.listdir(macos_dir)):
+            full = os.path.join(macos_dir, f)
+            if os.path.isfile(full):
+                return full
+    except OSError:
+        pass
+    return None
+
+
 def is_archive(path):
     low = path.lower()
     if low.endswith(_ARCHIVE_EXTS):

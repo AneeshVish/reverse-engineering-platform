@@ -572,15 +572,57 @@ class MainWindow(QMainWindow):
         self.decompile_worker.start()
 
     def open_file(self):
-        """Open a binary file and start analysis."""
+        """Open a binary file, a macOS .app bundle, or a folder/archive."""
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Binary File", "", "All Files (*)")
         if file_path:
-            self.current_file_path = file_path
-            if hasattr(self, 'file_label'):
-                self.file_label.setText(file_path)
-            self.log_view.append(f"[INFO] Opened file: {file_path}")
-            # Start binary analysis
-            self.start_binary_analysis(file_path)
+            self.open_path(file_path)
+
+    def open_path(self, file_path):
+        """Route a chosen path: single binary, .app bundle, or multi-file app."""
+        from src.core import bundle_analysis
+        # A macOS .app bundle is a directory; analyze its main executable.
+        if os.path.isdir(file_path) and file_path.rstrip('/').endswith('.app'):
+            exe = bundle_analysis.resolve_app_executable(file_path)
+            if exe:
+                self.log_view.append(f"[INFO] {os.path.basename(file_path)} is an app bundle; "
+                                     f"analyzing its executable: {os.path.basename(exe)}")
+                self._also_scan_bundle(file_path)
+                file_path = exe
+            else:
+                self.log_view.append(f"[WARN] Could not find an executable inside {file_path}; "
+                                     "running whole-bundle analysis instead.")
+                self._scan_bundle(file_path)
+                return
+        # A plain directory or an archive -> whole-application analysis.
+        elif os.path.isdir(file_path) or bundle_analysis.is_archive(file_path):
+            self.log_view.append(f"[INFO] {os.path.basename(file_path)} looks like a "
+                                 "multi-file application; running whole-app analysis.")
+            self._scan_bundle(file_path)
+            return
+
+        self.current_file_path = file_path
+        if hasattr(self, 'file_label'):
+            self.file_label.setText(file_path)
+        self.log_view.append(f"[INFO] Opened file: {file_path}")
+        self.start_binary_analysis(file_path)
+
+    def _scan_bundle(self, path):
+        """Run whole-application analysis in the Full Software tab."""
+        panel = getattr(self, 'full_software_panel', None)
+        if panel is None:
+            self.log_view.append("[ERROR] Full Software panel unavailable.")
+            return
+        self.analysis_tabs.setCurrentWidget(panel)
+        panel.analyze_folder(path)
+
+    def _also_scan_bundle(self, path):
+        """Kick off bundle analysis alongside single-exe analysis (best effort)."""
+        try:
+            panel = getattr(self, 'full_software_panel', None)
+            if panel is not None:
+                panel.analyze_folder(path)
+        except Exception:
+            pass
 
     def __init__(self, settings, plugin_manager):
         super().__init__()

@@ -217,14 +217,18 @@ class FullSoftwarePanel(QWidget):
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Software Folder")
         if folder:
-            self.progress.setVisible(True)
-            self.progress.setRange(0, 0)
-            self.tree.clear()
-            self.viewer.clear()
-            self.analysis_worker = FolderAnalysisWorker(folder)
-            self.analysis_worker.progress_update.connect(self.update_progress)
-            self.analysis_worker.analysis_complete.connect(self.on_analysis_complete)
-            self.analysis_worker.start()
+            self.analyze_folder(folder)
+
+    def analyze_folder(self, folder):
+        """Start whole-application analysis on a folder/bundle/archive path."""
+        self.progress.setVisible(True)
+        self.progress.setRange(0, 0)
+        self.tree.clear()
+        self.viewer.clear()
+        self.analysis_worker = FolderAnalysisWorker(folder)
+        self.analysis_worker.progress_update.connect(self.update_progress)
+        self.analysis_worker.analysis_complete.connect(self.on_analysis_complete)
+        self.analysis_worker.start()
 
     def update_progress(self, msg):
         self.progress.setFormat(msg)
