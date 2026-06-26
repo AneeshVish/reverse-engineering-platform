@@ -20,65 +20,25 @@ class FolderAnalysisWorker(QThread):
         self.decompiler_manager = DecompilerManager()
 
     def run(self):
+        from src.core.bundle_analysis import analyze_binary_file, render_summary, summarize_bundle
         result_tree = {}
         for root, dirs, files in os.walk(self.folder_path):
             for file in files:
                 file_path = os.path.join(root, file)
                 rel_path = os.path.relpath(file_path, self.folder_path)
-                analysis = self.analyze_file(file_path)
-                result_tree[rel_path] = analysis
+                summary = analyze_binary_file(file_path)
+                summary['summary_text'] = render_summary(summary)
+                # Include source code inline for quick viewing.
+                if summary.get('kind') == 'source':
+                    try:
+                        with open(file_path, 'r', encoding='utf-8', errors='replace') as fh:
+                            summary['code'] = fh.read()
+                    except Exception as e:
+                        summary['code'] = f"[ERROR] {e}"
+                result_tree[rel_path] = summary
                 self.progress_update.emit(f"Analyzed: {rel_path}")
+        result_tree['__bundle_summary__'] = summarize_bundle(result_tree)
         self.analysis_complete.emit(result_tree)
-
-    def analyze_file(self, file_path):
-        # Try unpacking
-        unpacker = BasicUnpacker()
-        unpacked_path = unpacker.unpack(file_path)
-        if unpacked_path:
-            file_path = unpacked_path
-        # Try universal loading and decompilation
-        loader = UniversalLoader()
-        loader.load(file_path)
-        bin_type = getattr(loader, 'file_type', None)
-        result = {'type': str(bin_type), 'path': file_path}
-        # For binaries (.exe, .dll, .bin, etc), always try decompilation
-        if (bin_type and str(bin_type) in ['FileType.PE', 'FileType.ELF', 'FileType.MACHO']) or file_path.lower().endswith(('.exe', '.dll', '.bin')):
-            decomp = self.decompiler_manager._run_retdec(file_path)
-            if decomp and not decomp.startswith('RetDec error') and not decomp.startswith('[ERROR]'):
-                result['decompilation'] = decomp
-            else:
-                # If decompilation fails, try disassembly (if available)
-                try:
-                    # Try to get disassembly from loader
-                    if hasattr(loader, 'instructions') and loader.instructions:
-                        instrs = loader.instructions
-                        disasm = '\n'.join([
-                            f"{instr.get('address', ''):08X}: {instr.get('mnemonic', '')} {instr.get('op_str', '')}".strip()
-                            for instr in instrs
-                        ])
-                        result['disassembly'] = disasm
-                    else:
-                        # fallback to preview
-                        with open(file_path, 'rb') as f:
-                            data = f.read(2048)
-                        result['preview'] = data.hex()[:256]
-                except Exception as e:
-                    result['preview'] = f"[ERROR] {e}"
-        elif file_path.endswith(('.py', '.js', '.java', '.c', '.cpp', '.h')):
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                    code = f.read()
-                result['code'] = code
-            except Exception as e:
-                result['code'] = f"[ERROR] {e}"
-        else:
-            try:
-                with open(file_path, 'rb') as f:
-                    data = f.read(2048)
-                result['preview'] = data.hex()[:256]
-            except Exception as e:
-                result['preview'] = f"[ERROR] {e}"
-        return result
 
 class FullSoftwarePanel(QWidget):
     def advanced_unpack_selected(self):
@@ -274,12 +234,16 @@ class FullSoftwarePanel(QWidget):
 
     def on_analysis_complete(self, results):
         self.progress.setVisible(False)
+        self.bundle_summary = results.pop('__bundle_summary__', '')
         self.analysis_results = results
         self.populate_tree()
+        if self.bundle_summary:
+            self.viewer.setPlainText(self.bundle_summary +
+                                     "\n\n(Select a file on the left for its details.)")
 
     def populate_tree(self):
         self.tree.clear()
-        paths = list(self.analysis_results.keys())
+        paths = [p for p in self.analysis_results.keys() if p != '__bundle_summary__']
         root_items = {}
         for path in paths:
             parts = path.split(os.sep)
@@ -306,22 +270,12 @@ class FullSoftwarePanel(QWidget):
         rel_path = os.sep.join(path)
         self.last_selected_path = rel_path
         result = self.analysis_results.get(rel_path, {})
-        display = ""
-        if 'decompilation' in result:
-            display = result['decompilation']
-        elif 'disassembly' in result:
-            display = result['disassembly']
-        elif 'code' in result:
-            display = result['code']
-        elif 'preview' in result:
-            display = f"[BINARY PREVIEW]\n{result['preview']}"
-        else:
-            display = '[No analysis available for this file]'
-        # Add advanced packer info/entropy if binary
-        abs_path = os.path.join(self.analysis_worker.folder_path, rel_path)
-        if os.path.isfile(abs_path) and abs_path.lower().endswith(('.exe', '.dll', '.bin')):
-            packer_info = self.adv_unpacker.detect_packer(abs_path)
-            entropy = self.adv_unpacker.entropy_analysis(abs_path)
-            display = f"[PACKER INFO]\n{packer_info}\n[ENTROPY] {entropy:.2f}\n\n" + display
-        self.viewer.setPlainText(display)
+        parts = []
+        if 'summary_text' in result:
+            parts.append(result['summary_text'])
+        if 'code' in result:
+            parts.append("\n----- SOURCE -----\n" + result['code'])
+        if not parts:
+            parts.append('[No analysis available for this file]')
+        self.viewer.setPlainText("\n\n".join(parts))
 
