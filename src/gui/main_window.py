@@ -1060,28 +1060,28 @@ class MainWindow(QMainWindow):
         """Refresh the pseudocode tab using offline or AI pseudocode based on toggle."""
         try:
             if hasattr(self, 'pseudocode_toggle') and self.pseudocode_toggle.toggle.isChecked():
-                # AI pseudocode
+                # AI pseudocode (runs in the background; never blocks the UI).
                 from src.core.ai_decompiler import AIDecompiler
-                from src.core.multiarch_disassembler import MultiArchDisassembler
-                if not self.current_file_path:
-                    self.pseudocode_view.setPlainText("[ERROR] No file loaded for AI pseudocode.")
+                # Prefer the structured model's listing, else disassemble on demand.
+                assembly_code = ""
+                model = getattr(self, 'program_model', None)
+                if model is not None and model.instructions:
+                    assembly_code = model.assembly_text()
+                elif self.current_file_path:
+                    from src.core.multiarch_disassembler import MultiArchDisassembler
+                    mad = MultiArchDisassembler(self.current_file_path)
+                    mad.load()
+                    instructions = getattr(mad, 'instructions', None) or []
+                    assembly_code = "\n".join(
+                        f"{i['mnemonic']} {i['op_str']}".strip() for i in instructions)
+                if not assembly_code.strip():
+                    self.pseudocode_view.setPlainText("[ERROR] No instructions for AI pseudocode. Load a binary first.")
                     return
-                mad = MultiArchDisassembler(self.current_file_path)
-                mad.load()
-                instructions = mad.instructions if hasattr(mad, 'instructions') else None
-                if not instructions:
-                    self.pseudocode_view.setPlainText("[ERROR] No instructions for AI pseudocode.")
-                    return
-                # Convert instructions to assembly string
-                assembly_code = "\n".join([
-                    f"{instr['mnemonic']} {instr['op_str']}".strip()
-                    for instr in instructions
-                ])
-                ai_decompiler = getattr(self, 'ai_decompiler', None)
-                if not ai_decompiler:
-                    ai_decompiler = AIDecompiler()
-                pseudo = ai_decompiler.decompile_assembly(assembly_code)
-                self.pseudocode_view.setPlainText(pseudo)
+                ai_decompiler = getattr(self, 'ai_decompiler', None) or AIDecompiler()
+                self.pseudocode_view.setPlainText("[INFO] Generating AI pseudocode in background...")
+                self._run_ai_async(ai_decompiler.decompile_assembly, (assembly_code,),
+                                   lambda p: self.pseudocode_view.setPlainText(p),
+                                   busy_msg="Generating AI pseudocode...")
             else:
                 # Offline pseudocode
                 from src.core.multiarch_disassembler import MultiArchDisassembler

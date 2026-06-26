@@ -82,10 +82,9 @@ class CryptoToolsPanel(QWidget):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select File to Plot Entropy")
         if not file_path:
             return
-        cmd = [sys.executable, script_path("plot_entropy"), file_path]
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
-        # The plot_entropy script shows a plot itself, but here we plot inline
-        # So, we re-implement entropy calculation and plot
+        # Plot inline. (We intentionally do NOT shell out to scripts/plot_entropy.py
+        # here: that script calls plt.show(), which would block until its window is
+        # closed and freeze this panel.)
         entropies = self.calculate_file_entropy(file_path)
         self.figure.clear()
         ax = self.figure.add_subplot(111)

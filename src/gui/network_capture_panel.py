@@ -13,15 +13,21 @@ class MitmproxyCaptureThread(QThread):
         self.proc = None
 
     def run(self):
-        # Start mitmproxy in regular mode, saving flows to log_path
+        # Use mitmdump (non-interactive) rather than mitmproxy (a curses TUI that
+        # cannot run when spawned from the GUI without a terminal). Listen on 8080.
+        import shutil
+        tool = shutil.which('mitmdump') or shutil.which('mitmproxy')
+        if not tool:
+            self.output_signal.emit("[ERROR] mitmdump not found. Install with: pip install mitmproxy")
+            return
         try:
             self.proc = subprocess.Popen([
-                'mitmproxy', '-w', self.log_path
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
+                tool, '--listen-port', '8080', '-w', self.log_path
+            ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
             for line in self.proc.stdout:
-                self.output_signal.emit(line)
+                self.output_signal.emit(line.rstrip())
         except Exception as e:
-            self.output_signal.emit(f"[ERROR] mitmproxy failed: {e}")
+            self.output_signal.emit(f"[ERROR] mitmdump failed: {e}")
 
     def stop(self):
         if self.proc:

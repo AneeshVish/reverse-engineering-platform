@@ -26,8 +26,8 @@ EXTERNAL_TOOLS = {
                "Install RetDec and add retdec-decompiler to PATH"),
     "ollama": ("ollama", "Local AI (Ollama)",
                "Install Ollama (ollama.com) and run `ollama serve`"),
-    "mitmproxy": ("mitmproxy", "Network capture",
-                  "pip install mitmproxy (or install the mitmproxy app)"),
+    "mitmproxy": ("mitmdump", "Network capture",
+                  "pip install mitmproxy (provides the mitmdump command)"),
 }
 
 # Optional Python packages: capability key -> (import name, human feature name,
