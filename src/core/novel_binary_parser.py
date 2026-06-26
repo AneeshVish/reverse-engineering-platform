@@ -63,6 +63,16 @@ class NovelBinaryParser:
                 if data[sig["offset"]:sig["offset"]+len(m)] == m:
                     rationale.append(f"Matched magic bytes at offset {sig['offset']}: {m}")
                     results.append(sig["name"])
+        # Disambiguate CAFEBABE: it is BOTH the fat Mach-O magic and the Java
+        # .class magic. In a fat Mach-O the 4 bytes after the magic are nfat_arch
+        # (the number of architectures: realistically 1..29). In a Java class they
+        # are minor+major version (major >= 45), so the value is large.
+        if "MACHO" in results and data[:4] == b"\xca\xfe\xba\xbe" and len(data) >= 8:
+            nfat = struct.unpack_from(">I", data, 4)[0]
+            if nfat >= 30:
+                results = [r for r in results if r != "MACHO"]
+                results.append("JAVA")
+                rationale.append(f"CAFEBABE with version field {nfat} -> Java .class, not Mach-O")
         # Heuristic: check for PE e_lfanew pointer
         if len(data) > 0x3c+4 and data[:2] == b"MZ":
             e_lfanew = struct.unpack_from("<I", data, 0x3c)[0]

@@ -122,17 +122,25 @@ class AIDecompiler:
 
 
     def enhance_ghidra_output(self, ghidra_code):
-        """
-        Refine Ghidra decompilation output using Ollama AI.
-        This will attempt to improve variable names, comments, and code structure.
+        """AI source reconstruction of decompiled C.
+
+        This is the realistic answer to "recover the source": the original names
+        and comments are gone forever (the compiler discarded them), but an LLM can
+        produce a far more *readable* reconstruction — meaningful identifiers,
+        inferred types, and explanatory comments. The result is clearly an
+        AI reconstruction, not the literal original source.
         """
         enhancement_prompt = (
-            "Please improve this decompiled code by:\n"
-            "1. Adding meaningful variable names\n"
-            "2. Adding helpful comments\n"
-            "3. Improving code structure\n"
-            "4. Identifying potential vulnerabilities\n\n"
-            "Original code:\n"
-            f"{ghidra_code}\n\nImproved code (C):\n"
+            "You are an expert reverse engineer. Reconstruct readable C from the "
+            "decompiler output below. The original symbol names and comments were "
+            "destroyed at compile time, so INFER good ones from behavior:\n"
+            "1. Rename variables/functions to meaningful names based on what they do.\n"
+            "2. Infer accurate types and replace generic ones (undefined4, uint, etc.).\n"
+            "3. Add concise comments explaining each block's purpose.\n"
+            "4. Add a top header comment summarizing the function's purpose and any "
+            "security-relevant behavior (crypto, file/network I/O, input parsing).\n"
+            "Output only C code. Mark it clearly as an AI reconstruction.\n\n"
+            "Decompiler output:\n"
+            f"{ghidra_code}\n\nReconstructed C (AI):\n"
         )
         return self._decompile_with_ollama(enhancement_prompt)

@@ -20,23 +20,20 @@ class FolderAnalysisWorker(QThread):
         self.decompiler_manager = DecompilerManager()
 
     def run(self):
-        from src.core.bundle_analysis import analyze_binary_file, render_summary, summarize_bundle
-        result_tree = {}
-        for root, dirs, files in os.walk(self.folder_path):
-            for file in files:
-                file_path = os.path.join(root, file)
-                rel_path = os.path.relpath(file_path, self.folder_path)
-                summary = analyze_binary_file(file_path)
-                summary['summary_text'] = render_summary(summary)
-                # Include source code inline for quick viewing.
-                if summary.get('kind') == 'source':
-                    try:
-                        with open(file_path, 'r', encoding='utf-8', errors='replace') as fh:
-                            summary['code'] = fh.read()
-                    except Exception as e:
-                        summary['code'] = f"[ERROR] {e}"
-                result_tree[rel_path] = summary
-                self.progress_update.emit(f"Analyzed: {rel_path}")
+        from src.core.bundle_analysis import analyze_application, render_summary, summarize_bundle
+        self.progress_update.emit("Walking application (recursing into archives)...")
+        # analyze_application recurses into archives (apk/jar/ipa/zip/tar/...).
+        result_tree = analyze_application(self.folder_path)
+        for rel_path, summary in result_tree.items():
+            summary['summary_text'] = render_summary(summary)
+            if summary.get('kind') == 'source':
+                p = summary.get('path')
+                try:
+                    with open(p, 'r', encoding='utf-8', errors='replace') as fh:
+                        summary['code'] = fh.read()
+                except Exception as e:
+                    summary['code'] = f"[ERROR] {e}"
+            self.progress_update.emit(f"Analyzed: {rel_path}")
         result_tree['__bundle_summary__'] = summarize_bundle(result_tree)
         self.analysis_complete.emit(result_tree)
 

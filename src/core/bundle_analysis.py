@@ -10,9 +10,17 @@ import hashlib
 import math
 import os
 import re
+import tarfile
+import tempfile
+import zipfile
 from collections import Counter
 
 from src.core.universal_loader import UniversalLoader, FileType
+
+# Archive containers that hold an application's many files. APK/IPA/JAR/WAR/WHL
+# and Electron .asar are all really zip/zip-like; installers vary.
+_ARCHIVE_EXTS = (".zip", ".jar", ".apk", ".ipa", ".war", ".whl", ".egg", ".aar",
+                 ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".nupkg")
 
 # Quick indicators of embedded secrets (best-effort, byte-level).
 _SECRET_RE = re.compile(
@@ -88,6 +96,18 @@ def analyze_binary_file(path):
     # Packing heuristic: UPX section name or very high entropy.
     summary["packed"] = (summary.get("entropy", 0) > 7.2) or (
         "upx" in summary.get("type", "").lower())
+
+    # Full protection report for actual binaries (lazy import avoids a cycle).
+    if summary.get("is_binary"):
+        try:
+            from src.core import protection_detector
+            rep = protection_detector.detect_protections(path)
+            summary["protection_level"] = rep["level"]
+            summary["protections"] = [p["name"] for p in rep["protections"]]
+            if rep["level"] in ("heavy", "medium", "light"):
+                summary["packed"] = True
+        except Exception:
+            pass
     return summary
 
 
@@ -112,6 +132,85 @@ def render_summary(summary):
     return "\n".join(lines)
 
 
+def is_archive(path):
+    low = path.lower()
+    if low.endswith(_ARCHIVE_EXTS):
+        return True
+    try:
+        return zipfile.is_zipfile(path) or tarfile.is_tarfile(path)
+    except OSError:
+        return False
+
+
+def _safe_extract(path, dest):
+    """Extract a zip/tar to dest, guarding against path-traversal (zip-slip).
+
+    We analyze hostile input, so any member that resolves outside dest is skipped.
+    Returns True if anything was extracted.
+    """
+    dest = os.path.abspath(dest)
+
+    def _within(target):
+        return os.path.abspath(target).startswith(dest + os.sep)
+
+    try:
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as z:
+                for member in z.namelist():
+                    target = os.path.join(dest, member)
+                    if _within(target):
+                        z.extract(member, dest)
+            return True
+        if tarfile.is_tarfile(path):
+            with tarfile.open(path) as t:
+                for member in t.getmembers():
+                    target = os.path.join(dest, member.name)
+                    if member.isfile() and _within(target):
+                        t.extract(member, dest)
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def analyze_application(root, max_depth=2, _depth=0, _prefix=""):
+    """Analyze a whole application: a folder, or an archive (apk/jar/ipa/zip/...).
+
+    Recurses into nested archives up to max_depth so a real app bundle is fully
+    walked. Returns {display_path: summary}. Never raises on a bad member.
+    """
+    results = {}
+
+    # A single archive at the top: extract and recurse.
+    if os.path.isfile(root) and is_archive(root) and _depth < max_depth:
+        tmp = tempfile.mkdtemp(prefix="reapp_")
+        if _safe_extract(root, tmp):
+            inner = analyze_application(tmp, max_depth, _depth + 1,
+                                        _prefix=_prefix + os.path.basename(root) + "!/")
+            results.update(inner)
+            return results
+        # Not extractable: analyze as a plain file.
+        results[_prefix + os.path.basename(root)] = analyze_binary_file(root)
+        return results
+
+    if os.path.isfile(root):
+        results[_prefix + os.path.basename(root)] = analyze_binary_file(root)
+        return results
+
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            fpath = os.path.join(dirpath, name)
+            rel = _prefix + os.path.relpath(fpath, root)
+            if is_archive(fpath) and _depth < max_depth:
+                tmp = tempfile.mkdtemp(prefix="reapp_")
+                if _safe_extract(fpath, tmp):
+                    results.update(analyze_application(
+                        tmp, max_depth, _depth + 1, _prefix=rel + "!/"))
+                    continue
+            results[rel] = analyze_binary_file(fpath)
+    return results
+
+
 def summarize_bundle(results):
     """Aggregate a top-level report over a {rel_path: summary} mapping."""
     files = [v for v in results.values() if isinstance(v, dict)]
@@ -119,7 +218,9 @@ def summarize_bundle(results):
     total_functions = sum(f.get("functions", 0) for f in binaries)
     total_secrets = sum(f.get("secret_hits", 0) for f in files)
     packed = [f for f in binaries if f.get("packed")]
+    protected = [f for f in binaries if f.get("protection_level") == "heavy"]
     by_type = Counter(f.get("type", "?") for f in binaries)
+    protector_names = sorted({p for f in binaries for p in f.get("protections", [])})
 
     lines = [
         "===== APPLICATION ANALYSIS SUMMARY =====",
@@ -130,6 +231,11 @@ def summarize_bundle(results):
         f"({total_secrets} hits)",
         f"Likely packed/encrypted binaries: {len(packed)}",
     ]
+    if protector_names:
+        lines.append(f"Protections detected: {', '.join(protector_names)}")
+    if protected:
+        lines.append("  Heavy protectors (manual work required): "
+                     + ", ".join(os.path.basename(f["path"]) for f in protected[:10]))
     if packed:
         lines.append("  Packed: " + ", ".join(os.path.basename(f["path"]) for f in packed[:10]))
     return "\n".join(lines)

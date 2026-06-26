@@ -1459,6 +1459,24 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'log_view') and functions:
                 self.log_view.append(f"[INFO] Discovered {len(functions)} functions.")
 
+        # Protection / packer report (and offer automated unpacking for UPX).
+        if self.current_file_path and os.path.isfile(self.current_file_path):
+            try:
+                from src.core import protection_detector
+                rep = protection_detector.detect_protections(self.current_file_path)
+                if hasattr(self, 'log_view'):
+                    self.log_view.append("[PROTECTION] " +
+                                         protection_detector.render_protection_report(rep)
+                                         .replace("\n", "\n[PROTECTION] "))
+                if rep.get('automatable'):
+                    unpacked = protection_detector.auto_unpack(self.current_file_path)
+                    if unpacked and hasattr(self, 'log_view'):
+                        self.log_view.append(f"[PROTECTION] Auto-unpacked to {unpacked}. "
+                                             "Open that file to analyze the unpacked code.")
+            except Exception as e:
+                if hasattr(self, 'log_view'):
+                    self.log_view.append(f"[WARN] Protection scan failed: {e}")
+
         # Only warn about packing when there is actual evidence (UPX sections or
         # very high section entropy) — not on every file.
         packed = any('upx' in str(s.get('name', '')).lower() for s in sections)
