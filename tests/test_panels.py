@@ -109,7 +109,8 @@ def test_full_pipeline_builds_model(main_window):
 def test_handlers_do_not_crash(main_window):
     w = main_window
     for name in ("export_iocs", "export_analysis", "configure_misp",
-                 "download_log_file", "download_disassembly", "show_cfg_viewer"):
+                 "download_log_file", "download_disassembly", "show_cfg_viewer",
+                 "run_full_decompilation"):
         getattr(w, name)()
 
 

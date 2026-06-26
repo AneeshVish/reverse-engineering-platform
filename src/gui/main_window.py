@@ -251,6 +251,54 @@ class AIWorker(QThread):
         except Exception as e:
             self.failed.emit(str(e))
 
+class FullDecompileWorker(QThread):
+    """Full-binary decompilation off the UI thread.
+
+    Tries AI (Ollama) -> RetDec -> Ghidra, using only backends that are
+    actually available, and emits the first usable result.
+    """
+    result_ready = pyqtSignal(dict)   # {'code': str, 'engine': str}
+    progress_update = pyqtSignal(str)
+
+    def __init__(self, file_path, assembly, ai_decompiler, decompiler_manager):
+        super().__init__()
+        self.file_path = file_path
+        self.assembly = assembly
+        self.ai_decompiler = ai_decompiler
+        self.decompiler_manager = decompiler_manager
+
+    @staticmethod
+    def _usable(text):
+        return bool(text) and text.strip() and \
+            'error' not in text.lower() and 'failed' not in text.lower()
+
+    def run(self):
+        from src.core import capabilities
+        try:
+            code, engine = None, 'None'
+            if self.assembly and capabilities.tool_available('ollama'):
+                self.progress_update.emit("Running AI decompilation...")
+                r = self.ai_decompiler.decompile_assembly(self.assembly)
+                if self._usable(r):
+                    code, engine = r, 'AI (Ollama)'
+            if not code and capabilities.tool_available('retdec'):
+                self.progress_update.emit("Running RetDec...")
+                r = self.decompiler_manager._run_retdec(self.file_path)
+                if self._usable(r):
+                    code, engine = r, 'RetDec'
+            if not code and capabilities.tool_available('ghidra'):
+                self.progress_update.emit("Running Ghidra...")
+                r = self.decompiler_manager._run_ghidra(self.file_path)
+                if self._usable(r):
+                    code, engine = r, 'Ghidra'
+            if not code:
+                code = ("[ERROR] No decompiler backend is available or produced output.\n"
+                        "Install Ghidra or RetDec (and add to PATH), or run Ollama "
+                        "(`ollama serve`), then retry. See the Analysis Log for capabilities.")
+            self.result_ready.emit({'code': code, 'engine': engine})
+        except Exception as e:
+            self.result_ready.emit({'code': f"[ERROR] Full decompilation failed: {e}", 'engine': 'None'})
+
 class MainWindow(QMainWindow):
     def compose_analysis_log(self, results):
         """Compose a full analysis log string from the results dict for AI decompilation."""
@@ -1093,83 +1141,51 @@ class MainWindow(QMainWindow):
             self.pseudocode_view.setPlainText(f"[ERROR] Could not generate pseudocode: {e}")
 
     def run_full_decompilation(self):
-        """Run AI decompilation on all code sections (not just .text) and show the best result."""
-        from src.core.universal_loader import UniversalLoader
-        from src.core.ai_decompiler import AIDecompiler
-        try:
-            loader = UniversalLoader()
-            if not loader.load(self.current_file_path):
-                self.source_code_view.setPlainText("[ERROR] Could not load binary for decompilation.")
-                return
-            parsed = loader.parsed
-            sections = getattr(parsed, 'sections', []) if hasattr(parsed, 'sections') else []
-            all_code = ""
-            for section in sections:
-                if hasattr(section, 'name') and section.name.lower() in ['.text', '__text', 'code', 'init', 'main']:
-                    content = loader.get_section_content(section.name)
-                    if content:
-                        from src.core.disassembler import DisassemblerEngine
-                        dis = DisassemblerEngine()
-                        instructions = dis.disassemble(content, section.virtual_address)
-                        for instr in instructions:
-                            all_code += f"{instr['mnemonic']} {instr['op_str']}\n"
-            if not all_code.strip():
-                self.source_code_view.setPlainText("[ERROR] Could not extract assembly for decompilation.")
-                return
-            self.source_code_view.setPlainText("[INFO] Running AI decompilation...\n(This may take a minute for large binaries)")
-            QApplication.processEvents()
-            result = self.ai_decompiler.decompile_assembly(all_code)
-            # If AI fails, fallback to RetDec/Ghidra
-            if not result or 'decompilation failed' in result.lower() or 'error' in result.lower() or result.strip() == '':
-                self.source_code_view.setPlainText("[WARN] AI decompilation failed or incomplete. Falling back to RetDec/Ghidra.")
-                retdec_result = self.decompiler_manager._run_retdec(self.current_file_path)
-                if retdec_result and 'error' not in retdec_result.lower() and 'failed' not in retdec_result.lower():
-                    self.source_code_view.setPlainText(retdec_result)
-                else:
-                    ghidra_result = self.decompiler_manager._run_ghidra(self.current_file_path)
-                    if ghidra_result and 'error' not in ghidra_result.lower() and 'failed' not in ghidra_result.lower():
-                        if len(ghidra_result.encode('utf-8')) > MAX_DISPLAY_SIZE or ghidra_result.count('\n') > MAX_DISPLAY_LINES:
-                            output_path = os.path.join(os.getcwd(), "output_full_decompile_ghidra.c")
-                            with open(output_path, "w", encoding="utf-8", errors="replace") as f:
-                                f.write(ghidra_result)
-                            self.source_code_view.setPlainText(f"[INFO] Decompiled code too large to display. Saved to {output_path}.")
-                            self.log_view.append(f"[INFO] Decompiled code saved to {output_path}.")
-                            self.show_open_output_button(output_path)
-                            try:
-                                import os
-                                open_path_externally(output_path)
-                            except Exception as e:
-                                from PyQt6.QtWidgets import QMessageBox
-                                QMessageBox.warning(self, "Open Output Failed", f"Could not open output file automatically: {e}")
-                        else:
-                            self.source_code_view.setPlainText(ghidra_result)
-                            self.log_view.append("[INFO] Source Code tab updated with Ghidra C decompilation.")
-                    else:
-                        self.source_code_view.setPlainText("[ERROR] All decompilation engines failed. Please check logs.")
-                        self.log_view.append("[ERROR] All decompilation engines failed.")
-            else:
-                if len(result.encode('utf-8')) > MAX_DISPLAY_SIZE or result.count('\n') > MAX_DISPLAY_LINES:
-                    output_path = os.path.join(os.getcwd(), "output_full_decompile_ai.c")
-                    with open(output_path, "w", encoding="utf-8", errors="replace") as f:
-                        f.write(result)
-                    self.source_code_view.setPlainText(f"[INFO] Decompiled code too large to display. Saved to {output_path}.")
-                    self.log_view.append(f"[WARN] Decompiled code too large to display. Saved to {output_path}.")
-                    self.show_open_output_button(output_path)
-                    # Auto-open the output file for user
-                    try:
-                        import os
-                        open_path_externally(output_path)
-                    except Exception as e:
-                        from PyQt6.QtWidgets import QMessageBox
-                        QMessageBox.warning(self, "Open Output Failed", f"Could not open output file automatically: {e}")
-                else:
-                    self.source_code_view.setPlainText(result)
-                    self.log_view.append("[INFO] Decompilation complete")
-        except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-            self.source_code_view.setPlainText(f"[ERROR] Full-binary decompilation failed: {e}")
-            self.log_view.append(f"[ERROR] Full-binary decompilation failed: {e}")
-            QMessageBox.critical(self, "Decompilation Error", f"Full-binary decompilation failed: {e}")
+        """Full-binary decompilation (AI -> RetDec -> Ghidra), off the UI thread."""
+        if not self.current_file_path:
+            self.source_code_view.setPlainText("[ERROR] No file loaded for decompilation.")
+            return
+        # Prefer the already-built structured model's assembly listing.
+        model = getattr(self, 'program_model', None)
+        assembly = model.assembly_text() if (model and model.instructions) else ""
+        self.source_code_view.setPlainText(
+            "[INFO] Running full decompilation in the background...\n"
+            "(This may take a while for large binaries.)")
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setRange(0, 0)
+        self._full_decompile_worker = FullDecompileWorker(
+            self.current_file_path, assembly, self.ai_decompiler, self.decompiler_manager)
+        self._full_decompile_worker.result_ready.connect(self._on_full_decompile_result)
+        self._full_decompile_worker.progress_update.connect(self.update_progress)
+        self._full_decompile_worker.start()
+
+    def _on_full_decompile_result(self, res):
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setVisible(False)
+        code = res.get('code', '')
+        engine = res.get('engine', 'None')
+        # Very large output is written to a temp file rather than rendered inline.
+        if len(code.encode('utf-8')) > MAX_DISPLAY_SIZE or code.count('\n') > MAX_DISPLAY_LINES:
+            import tempfile
+            output_path = os.path.join(tempfile.gettempdir(), "output_full_decompile.c")
+            try:
+                with open(output_path, "w", encoding="utf-8", errors="replace") as f:
+                    f.write(code)
+                self.source_code_view.setPlainText(
+                    f"[INFO] Decompiled code too large to display. Saved to {output_path}.")
+                self.log_view.append(f"[INFO] Decompiled code saved to {output_path}.")
+                self.show_open_output_button(output_path)
+                open_path_externally(output_path)
+            except Exception as e:
+                self.source_code_view.setPlainText(code[:MAX_DISPLAY_SIZE])
+                self.log_view.append(f"[WARN] Could not save large output: {e}")
+        else:
+            self.source_code_view.setPlainText(code)
+        if engine and engine != 'None':
+            self.log_view.append(f"[INFO] Full decompilation complete via {engine}.")
+        else:
+            self.log_view.append("[WARN] Full decompilation produced no usable output.")
 
     def on_decompile_complete(self, results):
         # Update AI analysis panel with results as before
