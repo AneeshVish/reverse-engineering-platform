@@ -69,6 +69,25 @@ which backends are active.
 
 ---
 
+## Analyzing a single binary vs. a whole application
+- **Single binary** (`.exe`, `.dll`, `.so`, `.dylib`, a Mach-O/ELF/PE): use
+  **File → Open Binary**. You get disassembly, a function list (double-click to
+  navigate), control-flow graphs, entropy/sections, security audit, strings/keys,
+  and decompiled C *when a decompiler backend is installed*.
+- **A whole app** (a folder, `.app` bundle, or extracted installer — apps are
+  usually *many* files): use the **Full Software** tab and point it at the folder.
+  It walks the entire tree, classifies every file, and produces an
+  **application-wide summary** plus a per-file deep dive (format, sections,
+  functions, entropy/packing, and embedded-secret hits).
+
+**Honest scope:** like every RE tool (IDA, Ghidra, Binary Ninja), this recovers a
+faithful *structural* understanding — disassembly, control flow, and decompiled
+C — but **not** the original source with its real names and comments, and it does
+not automatically defeat strong obfuscation/packing/DRM. It gives you a deep,
+navigable map of what the software does; it does not magically reprint its source.
+
+---
+
 ## Project Layout
 - `main.py` — Start here!
 - `src/`
