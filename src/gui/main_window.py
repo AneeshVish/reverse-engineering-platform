@@ -41,6 +41,7 @@ def open_path_externally(path):
 
 from src.core.universal_loader import UniversalLoader
 from src.core.disassembler import DisassemblerEngine, Architecture
+from src.core.program_model import ProgramModel
 from src.core.unpacker import BasicUnpacker
 from src.core.decompiler_manager import DecompilerManager, DecompilerEngine
 from src.core.ai_decompiler import AIDecompiler
@@ -138,6 +139,7 @@ class BinaryAnalysisWorker(QThread):
                             arch = Architecture.X86_64
                     if arch is not None:
                         self.disassembler.initialize(arch)
+                        bin_info['arch'] = str(arch)
                         print(f"[DEBUG] Disassembler initialized for arch: {arch}")
                     else:
                         print("[DEBUG] Could not detect architecture, skipping disassembly.")
@@ -444,6 +446,10 @@ class MainWindow(QMainWindow):
         analysis_log = None
         if hasattr(self, 'last_analysis_results') and self.last_analysis_results is not None:
             analysis_log = self.last_analysis_results.get('analysis_log')
+        # Prefer the structured model's assembly listing over scraping the view.
+        model = getattr(self, 'program_model', None)
+        if not analysis_log and model is not None and model.instructions:
+            analysis_log = model.assembly_text()
         if not analysis_log and hasattr(self, 'disassembly_view'):
             analysis_log = self.disassembly_view.toPlainText()
         if not analysis_log:
@@ -979,10 +985,13 @@ class MainWindow(QMainWindow):
         """Show the control flow graph for the current disassembly."""
         try:
             from src.gui.cfg_viewer import CFGViewer
-            # Parse instructions from disassembly view
-            # Extract instructions from DisassemblyView table
+            # Prefer the structured program model (real addresses + branch edges).
             instructions = []
-            if hasattr(self.disassembly_view, 'table'):
+            model = getattr(self, 'program_model', None)
+            if model is not None and model.instructions:
+                instructions = model.instructions
+            elif hasattr(self.disassembly_view, 'table'):
+                # Fallback: reconstruct from the disassembly table.
                 table = self.disassembly_view.table
                 for row in range(table.rowCount()):
                     address_item = table.item(row, 0)
@@ -993,9 +1002,11 @@ class MainWindow(QMainWindow):
                             address = int(address_item.text(), 16)
                         except Exception:
                             address = row
-                        mnemonic = mnemonic_item.text()
-                        op_str = operands_item.text()
-                        instructions.append({'address': address, 'mnemonic': mnemonic, 'op_str': op_str})
+                        instructions.append({
+                            'address': address,
+                            'mnemonic': mnemonic_item.text(),
+                            'op_str': operands_item.text(),
+                        })
             if not instructions:
                 self.log_view.append("[WARN] No instructions to visualize for CFG.")
                 return
@@ -1400,6 +1411,20 @@ class MainWindow(QMainWindow):
         analysis_log = self.compose_analysis_log(results)
         results['analysis_log'] = analysis_log  # Store for later use
         self.last_analysis_results = results
+        # Build the structured program model (single source of truth for CFG,
+        # re-analysis, pseudocode) instead of re-parsing the disassembly text.
+        try:
+            self.program_model = ProgramModel.from_results(results)
+            if hasattr(self, 'log_view') and self.program_model.instructions:
+                s = self.program_model.stats()
+                self.log_view.append(
+                    f"[MODEL] {s['instructions']} instructions, "
+                    f"{s['basic_blocks']} basic blocks, {s['edges']} CFG edges."
+                )
+        except Exception as e:
+            self.program_model = None
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[WARN] Could not build program model: {e}")
         # NOTE: C decompilation is handled asynchronously by DecompileWorker below.
         # The previous synchronous decompile_parallel() call here blocked the UI
         # thread for up to 5 minutes and returned nothing usable ('consensus' is
