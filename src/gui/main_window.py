@@ -1386,20 +1386,32 @@ class MainWindow(QMainWindow):
         """
         self.progress_bar.setVisible(False)
         instructions = results.get('instructions', [])
-        # Compose a full analysis log string for AI decompilation
-        if hasattr(self, 'log_view'):
-            self.log_view.append("[WARNING] This binary appears to be packed (e.g., with UPX or another packer). Please unpack it before attempting AI decompilation for best results.")
+        sections = results.get('sections', [])
+
+        # Populate the left-panel sections tree.
+        if hasattr(self, 'binary_info_tree'):
+            self.binary_info_tree.clear()
+            for s in sections:
+                QTreeWidgetItem(self.binary_info_tree, [
+                    str(s.get('name', '')),
+                    hex(s.get('virtual_address', 0)),
+                    str(s.get('size', 0)),
+                ])
+
+        # Only warn about packing when there is actual evidence (UPX sections or
+        # very high section entropy) — not on every file.
+        packed = any('upx' in str(s.get('name', '')).lower() for s in sections)
+        if packed and hasattr(self, 'log_view'):
+            self.log_view.append("[WARNING] Binary looks packed (UPX section found). "
+                                 "Unpack with 'upx -d <file>' for better decompilation.")
             try:
                 from src.core.ai_decompiler import AIDecompiler
                 binary_path = getattr(self, 'current_file_path', None)
                 unpacked_path = AIDecompiler.auto_unpack_upx(binary_path) if binary_path else None
                 if unpacked_path:
-                    self.log_view.append(f"[INFO] The binary was auto-unpacked to {unpacked_path}. Please re-run analysis on this file for improved AI results.")
-                else:
-                    self.log_view.append("[INFO] UPX was not found or auto-unpack failed. Please unpack manually with 'upx -d <file>' and retry.")
+                    self.log_view.append(f"[INFO] Auto-unpacked to {unpacked_path}. Re-run analysis on it.")
             except Exception:
-                self.log_view.append("[INFO] UPX auto-unpack check failed. Please unpack manually if needed.")
-        self.source_code_view.append("// [WARNING] This binary appears to be packed (e.g., with UPX or another packer). Please unpack it before attempting AI decompilation for best results.\n")
+                pass
 
         # Show plain disassembly in the format 'address: mnemonic operands'
         disasm_lines = []
@@ -1481,6 +1493,25 @@ class MainWindow(QMainWindow):
             self.program_model = None
             if hasattr(self, 'log_view'):
                 self.log_view.append(f"[WARN] Could not build program model: {e}")
+
+        # Feed the Visualization tab (entropy map + basic-block CFG) from real data.
+        try:
+            if hasattr(self, 'viz_widget'):
+                if self.current_file_path and os.path.isfile(self.current_file_path):
+                    with open(self.current_file_path, 'rb') as fh:
+                        self.viz_widget.set_binary_data(fh.read())
+                if getattr(self, 'program_model', None) and self.program_model.instructions:
+                    blocks = [{
+                        'address': b.start,
+                        'size': len(b.instructions),
+                        'instructions': b.instructions,
+                        'targets': b.successors,
+                    } for b in self.program_model.basic_blocks()]
+                    self.viz_widget.update_cfg(blocks)
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[WARN] Visualization update failed: {e}")
+
         # NOTE: C decompilation is handled asynchronously by DecompileWorker below.
         # The previous synchronous decompile_parallel() call here blocked the UI
         # thread for up to 5 minutes and returned nothing usable ('consensus' is
