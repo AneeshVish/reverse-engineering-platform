@@ -1544,9 +1544,16 @@ class MainWindow(QMainWindow):
             disasm_lines.append(line)
         self.disassembly_view.setPlainText('\n'.join(disasm_lines))
 
-        # --- Endpoint Detection: always generate and display report in Endpoint Detection tab ---
-        endpoint_results = format_endpoint_results(detect_endpoints(disasm_lines))
-        self.endpoint_detection_view.setPlainText(endpoint_results)
+        # --- Endpoint Detection: scan the binary's actual strings (URLs/IPs/
+        # domains/network-API references), not instruction shapes. ---
+        try:
+            endpoints = []
+            if self.current_file_path and os.path.isfile(self.current_file_path):
+                with open(self.current_file_path, 'rb') as fh:
+                    endpoints = detect_endpoints(fh.read(64 * 1024 * 1024))
+            self.endpoint_detection_view.setPlainText(format_endpoint_results(endpoints))
+        except Exception as e:
+            self.endpoint_detection_view.setPlainText(f"[ERROR] Endpoint detection failed: {e}")
 
         # Restore detailed log info as before
         if hasattr(self, 'log_view'):
