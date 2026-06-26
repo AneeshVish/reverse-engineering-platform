@@ -22,28 +22,33 @@ class DisassemblerEngine:
     def initialize(self, architecture, mode=None):
         """Initialize with enhanced error handling"""
         try:
-            # Set architecture and mode
+            # Set architecture and mode, plus an architecture-appropriate NOP used
+            # only to self-test the engine (x86 NOP is invalid on ARM, which made
+            # ARM/ARM64 init wrongly report failure).
             if architecture == Architecture.X86_64:
                 self.md = Cs(CS_ARCH_X86, CS_MODE_64)
+                test_code = b'\x90'                      # nop
                 print("[DEBUG] Initialized x64 disassembler")
             elif architecture == Architecture.X86:
                 self.md = Cs(CS_ARCH_X86, CS_MODE_32)
+                test_code = b'\x90'                      # nop
                 print("[DEBUG] Initialized x86 disassembler")
             elif architecture == Architecture.ARM64:
                 self.md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+                test_code = b'\x1f\x20\x03\xd5'          # nop (AArch64)
                 print("[DEBUG] Initialized ARM64 disassembler")
             elif architecture == Architecture.ARM:
                 self.md = Cs(CS_ARCH_ARM, CS_MODE_ARM)
+                test_code = b'\x00\xf0\x20\xe3'          # nop (ARM A32)
                 print("[DEBUG] Initialized ARM disassembler")
             else:
                 self.logger.error(f"Unsupported architecture: {architecture}")
                 return False
-                
+
             self.md.detail = True
             self.md.skipdata = True  # Critical for handling mixed code/data
-            
-            # Test disassembler with simple instruction
-            test_code = b'\x90'  # NOP instruction
+
+            # Test disassembler with an architecture-appropriate instruction
             test_result = list(self.md.disasm(test_code, 0))
             if len(test_result) > 0:
                 print("[DEBUG] Disassembler test successful")

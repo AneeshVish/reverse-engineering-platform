@@ -132,7 +132,7 @@ class FullSoftwarePanel(QWidget):
                 data = f.read()
             xor_results = self.adv_unpacker.brute_force_xor(data)
             if xor_results:
-                import tempfile, os
+                import tempfile  # os is imported at module level
                 xor_sections = []
                 for r in xor_results:
                     section = f"Key {r['key']}: Format: {r['format']} | Language: {r['high_level']}\nSnippet:\n{r['snippet']}"

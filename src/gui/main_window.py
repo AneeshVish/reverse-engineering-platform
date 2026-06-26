@@ -591,52 +591,65 @@ class MainWindow(QMainWindow):
                 background: none;
             }
         """)
+        # Report detected backends and disable features whose tools are missing,
+        # so nothing in the UI silently fails later.
+        self.report_capabilities()
+        self.apply_capability_gating()
+
+    def report_capabilities(self):
+        """Log which analysis backends are available (see src/core/capabilities)."""
+        try:
+            from src.core import capabilities
+            if hasattr(self, 'log_view'):
+                for line in capabilities.report_lines():
+                    self.log_view.append(line)
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[WARN] Capability probe failed: {e}")
+
+    def apply_capability_gating(self):
+        """Disable buttons/tabs whose backing tool is unavailable, with a tooltip.
+
+        Keeps the UI honest: a disabled, explained control beats one that errors.
+        """
+        try:
+            from src.core import capabilities
+        except Exception:
+            return
+
+        def gate(widget, cap_key):
+            if widget is None:
+                return
+            available, name, hint = capabilities.feature_status(cap_key)
+            if not available:
+                widget.setEnabled(False)
+                widget.setToolTip(f"{name} unavailable — {hint}")
+
+        # Full-binary decompilation needs Ghidra or RetDec.
+        if not (capabilities.tool_available("ghidra") or capabilities.tool_available("retdec")):
+            for attr in ("full_c_action", "cfg_btn"):
+                w = getattr(self, attr, None)
+                if w is not None and hasattr(w, "setEnabled"):
+                    w.setToolTip("Decompiler backend unavailable — install Ghidra or RetDec (see ROADMAP/README)")
+        # Network capture needs mitmproxy.
+        gate(getattr(getattr(self, "network_capture_panel", None), "start_btn", None), "mitmproxy")
 
     def launch_security_mode(self):
-        import subprocess, sys, os
-        # Find the path to the security GUI
-        # Corrected path: use project root, not src/
-        # Robust path: always go two levels up from this file (src/gui/) to project root
-        gui_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'ultimate_file_protection', 'gui.py'))
-        python_exe = sys.executable
-        try:
-            subprocess.Popen([python_exe, gui_path])
-        except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Security Mode Error", f"Failed to launch Security GUI:\n{str(e)}")
+        """Enter the main workbench focused on the Security Audit workflow.
 
-        # Initialize AI components
-        self.ai_decompiler = AIDecompiler()
-        self.decompiler_manager = DecompilerManager()
-        self.decompiler_manager.register_engine(
-            DecompilerEngine.LLM4DECOMPILE, 
-            self.ai_decompiler
-        )
-        # Map model combo index to AIDecompiler model_type
-        # Only Ollama is supported for AI decompilation
-        
-        # Initialize threat intelligence
-        self.threat_intel = ThreatIntelligence()
-        self.ioc_extractor = IOCExtractor()
-        
-        self.setWindowTitle("Reverse Engineering Platform")
-        # Set a safe default window size and min/max
-        self.setMinimumSize(1000, 600)
-        self.resize(1200, 800)
-        screen = self.screen() or self.window().screen() if hasattr(self, 'window') else None
-        if screen:
-            screen_size = screen.availableGeometry().size()
-            safe_width = min(1200, screen_size.width())
-            safe_height = min(800, screen_size.height())
-            min_width = min(900, screen_size.width())
-            min_height = min(600, screen_size.height())
-            self.setMinimumSize(min_width, min_height)
-            self.setMaximumSize(screen_size.width(), screen_size.height())
-            self.resize(safe_width, safe_height)
-        else:
-            self.setMinimumSize(900, 600)
-            self.resize(1200, 800)
-        # The init_ui, setup_menu, setup_status_bar, and stylesheet are now called in launch_main_ui after welcome screen
+        (Previously this launched a separate file-protection GUI that has been
+        removed from the product; the two welcome buttons now share one workbench
+        and differ only in which tab is shown first.)
+        """
+        self.launch_main_ui()
+        # Bring the Security Audit tab to the front, if it exists.
+        if hasattr(self, 'analysis_tabs'):
+            for i in range(self.analysis_tabs.count()):
+                if self.analysis_tabs.tabText(i) == "Security Audit":
+                    self.analysis_tabs.setCurrentIndex(i)
+                    break
+        if hasattr(self, 'log_view'):
+            self.log_view.append("[INFO] Security mode: focused on Security Audit.")
 
     def init_ui(self):
         self.setWindowTitle("Ultimate Reverse Engineering Platform")
@@ -1311,6 +1324,7 @@ class MainWindow(QMainWindow):
             self.log_view.append("[WARNING] This binary appears to be packed (e.g., with UPX or another packer). Please unpack it before attempting AI decompilation for best results.")
             try:
                 from src.core.ai_decompiler import AIDecompiler
+                binary_path = getattr(self, 'current_file_path', None)
                 unpacked_path = AIDecompiler.auto_unpack_upx(binary_path) if binary_path else None
                 if unpacked_path:
                     self.log_view.append(f"[INFO] The binary was auto-unpacked to {unpacked_path}. Please re-run analysis on this file for improved AI results.")
