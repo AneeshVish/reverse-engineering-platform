@@ -204,11 +204,15 @@ class AdvancedVisualizationWidget(QWidget):
         
         entropy_values = []
         
-        for i in range(0, len(data) - window_size + 1, window_size // 4):
+        step = max(1, window_size // 4)
+        for i in range(0, len(data) - window_size + 1, step):
             window = data[i:i + window_size]
-            
-            # Calculate frequency of each byte value
-            byte_counts = np.bincount(window)
+
+            # Calculate frequency of each byte value. bincount needs a 1-D int
+            # array, so convert bytes -> uint8 array (numpy 2.x treats raw bytes
+            # as a 0-d scalar, which raises "object of too small depth").
+            arr = np.frombuffer(bytes(window), dtype=np.uint8)
+            byte_counts = np.bincount(arr, minlength=256)
             probabilities = byte_counts[byte_counts > 0] / len(window)
             
             # Calculate Shannon entropy

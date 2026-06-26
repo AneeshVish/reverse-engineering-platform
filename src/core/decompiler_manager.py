@@ -93,7 +93,20 @@ class DecompilerManager:
         try:
             import subprocess
             import tempfile
-            
+            import shutil
+
+            # Resolve the Ghidra headless launcher: env override, then PATH.
+            # (Never hardcode an absolute path — this must work cross-platform.)
+            ghidra_headless = (
+                os.environ.get("GHIDRA_HEADLESS")
+                or shutil.which("analyzeHeadless")
+                or shutil.which("analyzeHeadless.bat")
+            )
+            if not ghidra_headless:
+                return ("[ERROR] Ghidra not available. Install Ghidra and either add its "
+                        "support/ directory (analyzeHeadless) to PATH or set the "
+                        "GHIDRA_HEADLESS environment variable to the launcher path.")
+
             # Create Ghidra Python (Jython) script for headless analysis
             script_content = '''
 from ghidra.app.decompiler import DecompInterface
@@ -125,14 +138,13 @@ for func in functions:
                 f.write(script_content)
                 script_path = f.name
             import uuid
-            import shutil
             # Use a unique temp project directory for each run
             project_dir = os.path.join(tempfile.gettempdir(), f"ghidra_project_{uuid.uuid4().hex}")
             os.makedirs(project_dir, exist_ok=True)
             logger.info(f"[GHIDRA SCRIPT PATH] {script_path}")
             logger.info(f"[GHIDRA TEMP PROJECT DIR] {project_dir}")
             logger.info(f"[GHIDRA BINARY PATH] {binary_path}")
-            ghidra_cmd = [r"D:\C\Downloads\ghidra_11.3.2_PUBLIC_20250415\ghidra_11.3.2_PUBLIC\support\analyzeHeadless.bat", project_dir, "temp_project", "-import", binary_path, "-postScript", script_path]
+            ghidra_cmd = [ghidra_headless, project_dir, "temp_project", "-import", binary_path, "-postScript", script_path]
             logger.info(f"[GHIDRA CMD] {' '.join(ghidra_cmd)}")
             result = subprocess.run(
                 ghidra_cmd,

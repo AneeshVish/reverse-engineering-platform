@@ -5,6 +5,8 @@ import sys
 import os
 import json
 
+from src.utils.paths import script_path
+
 class SecurityAuditPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -40,15 +42,16 @@ class SecurityAuditPanel(QWidget):
         target, _ = QFileDialog.getOpenFileName(self, "Select File or Directory to Audit")
         if not target:
             return
-        # Run the audit script and capture output
-        cmd = [sys.executable, os.path.join("scripts", "security_audit.py"), target, "--output", "audit_results.json"]
+        # Run the audit script and capture output (write JSON to a temp file).
+        import tempfile
+        audit_json_path = os.path.join(tempfile.gettempdir(), "re_audit_results.json")
+        cmd = [sys.executable, script_path("security_audit"), target, "--output", audit_json_path]
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         self.last_findings = proc.stdout
         self.patch_btn.setEnabled(True)
 
         # Try to load structured findings from JSON output
         findings_data = None
-        audit_json_path = "audit_results.json"
         if os.path.exists(audit_json_path):
             try:
                 with open(audit_json_path, "r", encoding="utf-8") as f:

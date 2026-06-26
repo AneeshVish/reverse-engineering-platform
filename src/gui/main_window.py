@@ -232,6 +232,25 @@ class ThreatAnalysisWorker(QThread):
             print(f"[ThreatAnalysisWorker] Threat analysis failed: {str(e)}")
             self.progress_update.emit(f"Threat analysis error: {str(e)}")
 
+class AIWorker(QThread):
+    """Runs a (potentially slow) AI/LLM callable off the UI thread.
+
+    Used for ask/summarize/enhance so an Ollama call never freezes the window.
+    """
+    result_ready = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, func, *args):
+        super().__init__()
+        self._func = func
+        self._args = args
+
+    def run(self):
+        try:
+            self.result_ready.emit(self._func(*self._args) or "")
+        except Exception as e:
+            self.failed.emit(str(e))
+
 class MainWindow(QMainWindow):
     def compose_analysis_log(self, results):
         """Compose a full analysis log string from the results dict for AI decompilation."""
@@ -335,6 +354,27 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'log_view'):
                 self.log_view.append(f"[ERROR] Failed to export analysis log: {e}")
 
+    def _run_ai_async(self, func, args, on_result, busy_msg="Running AI in background..."):
+        """Run an AI/LLM callable off the UI thread; gate on Ollama availability."""
+        from src.core import capabilities
+        if not capabilities.tool_available('ollama'):
+            if hasattr(self, 'log_view'):
+                self.log_view.append("[WARN] Ollama not available — install it and run "
+                                      "`ollama serve` to use AI features.")
+            return
+        if hasattr(self, 'log_view'):
+            self.log_view.append(f"[INFO] {busy_msg}")
+        worker = AIWorker(func, *args)
+        worker.result_ready.connect(on_result)
+        if hasattr(self, 'log_view'):
+            worker.failed.connect(lambda e: self.log_view.append(f"[ERROR] AI task failed: {e}"))
+        # Keep a reference so the QThread is not garbage-collected mid-run.
+        self._ai_workers = getattr(self, '_ai_workers', [])
+        self._ai_workers.append(worker)
+        worker.finished.connect(
+            lambda: self._ai_workers.remove(worker) if worker in self._ai_workers else None)
+        worker.start()
+
     def ask_ai_about_code(self):
         """Prompt the user for a question about the code and get an AI answer."""
         from PyQt6.QtWidgets import QInputDialog, QMessageBox
@@ -351,12 +391,12 @@ class MainWindow(QMainWindow):
             "If the question is about code behavior, security, or vulnerabilities, provide actionable insights.\n\n"
             f"C code:\n{code}\n\nQuestion: {question}\nAnswer: "
         )
-        if hasattr(self, 'log_view'):
-            self.log_view.append(f"[INFO] Asking AI: {question}")
-        answer = self.ai_decompiler._decompile_with_ollama(prompt)
-        if hasattr(self, 'log_view'):
-            self.log_view.append(f"[INFO] AI Answer:\n{answer}")
-        QMessageBox.information(self, "AI Q&A", answer)
+        def on_result(answer):
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[INFO] AI Answer:\n{answer}")
+            QMessageBox.information(self, "AI Q&A", answer)
+        self._run_ai_async(self.ai_decompiler._decompile_with_ollama, (prompt,),
+                           on_result, busy_msg=f"Asking AI: {question}")
 
     def summarize_function_with_ai(self):
         """Summarize the function currently shown in the Source Code tab using the AI decompiler."""
@@ -390,13 +430,13 @@ class MainWindow(QMainWindow):
             "Output a concise summary for a reverse engineer.\n\n"
             f"{code_to_summarize}\n"
         )
-        if hasattr(self, 'log_view'):
-            self.log_view.append("[INFO] Requesting function summary from AI...")
-        summary = self.ai_decompiler._decompile_with_ollama(prompt)
-        if hasattr(self, 'log_view'):
-            self.log_view.append("[INFO] AI Summary:\n" + summary)
         from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.information(self, "AI Function Summary", summary)
+        def on_result(summary):
+            if hasattr(self, 'log_view'):
+                self.log_view.append("[INFO] AI Summary:\n" + summary)
+            QMessageBox.information(self, "AI Function Summary", summary)
+        self._run_ai_async(self.ai_decompiler._decompile_with_ollama, (prompt,),
+                           on_result, busy_msg="Requesting function summary from AI...")
 
     def export_ai_results(self):
         """Export the current AI decompilation results from the Source Code tab to a file."""
@@ -433,13 +473,13 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'log_view'):
                 self.log_view.append("[ERROR] No Ghidra code available to enhance.")
             return
-        if hasattr(self, 'log_view'):
-            self.log_view.append("[INFO] Enhancing Ghidra code with AI comments and improvements...")
-        enhanced_code = self.ai_decompiler.enhance_ghidra_output(ghidra_code)
-        if hasattr(self, 'source_code_view'):
-            self.source_code_view.setPlainText(enhanced_code)
-        if hasattr(self, 'log_view'):
-            self.log_view.append("[INFO] Enhanced code displayed in Source Code tab.")
+        def on_result(enhanced_code):
+            if hasattr(self, 'source_code_view'):
+                self.source_code_view.setPlainText(enhanced_code)
+            if hasattr(self, 'log_view'):
+                self.log_view.append("[INFO] Enhanced code displayed in Source Code tab.")
+        self._run_ai_async(self.ai_decompiler.enhance_ghidra_output, (ghidra_code,),
+                           on_result, busy_msg="Enhancing Ghidra code with AI comments...")
 
     def reanalyze_with_ai(self):
         """Re-run AI decompilation using the last analysis log or current disassembly view."""
