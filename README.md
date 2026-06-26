@@ -28,20 +28,44 @@ This platform is a friendly, all-in-one toolkit for anyone interested in reverse
 ---
 
 ## Quickstart
-1. **Install Python dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. **Run the app:**
-   ```bash
-   python main.py
-   ```
-3. **(Optional) Build a standalone executable:**
-   ```bash
-   pip install pyinstaller
-   pyinstaller --onefile main.py
-   # You'll find the .exe in the dist/ folder
-   ```
+Works on macOS, Linux, and Windows. Python 3.11 / 3.12 are the primary targets
+(3.13/3.14 also work with current wheels).
+
+```bash
+# 1. Create an isolated environment
+python3 -m venv .venv
+
+# 2. Install the core dependencies (everything needed for the core workflow)
+.venv/bin/pip install -r requirements.txt          # Windows: .venv\Scripts\pip
+
+# 3. Run the app
+.venv/bin/python main.py                            # Windows: .venv\Scripts\python
+```
+
+On launch you'll get a **Welcome screen** with two modes — **Cracking** (general
+RE workbench) and **Security** (opens straight on the Security Audit tab). Both
+open the same 14-tab workbench; pick either, then **File → Open Binary**.
+
+### Optional power features
+The app runs fully without these. Each is **auto-detected at startup** and its
+button is disabled with a tooltip if the backend isn't installed (so nothing ever
+fails silently). Install what you need:
+
+```bash
+.venv/bin/pip install -r requirements-optional.txt  # angr, frida, torch, mitmproxy, ...
+```
+
+| Feature | Needs | How |
+|---|---|---|
+| AI decompilation / summaries / Q&A | **Ollama** | `ollama serve` + `ollama pull llama3.2` |
+| Ghidra decompilation | **Ghidra** | add `analyzeHeadless` to PATH or set `GHIDRA_HEADLESS` |
+| RetDec decompilation | **RetDec** | add `retdec-decompiler` to PATH |
+| Network capture | **mitmproxy** | `pip install mitmproxy` (provides `mitmdump`) |
+| Symbolic exec / emulation | angr / unicorn | `requirements-optional.txt` |
+| Dynamic instrumentation | frida | `requirements-optional.txt` |
+
+The **Analysis Log** tab prints a capability report on startup so you always know
+which backends are active.
 
 ---
 
