@@ -1,0 +1,36 @@
+# Optional / enhanced-feature dependencies. The app runs without these, but
+# the corresponding features are disabled until the package (and, where noted,
+# an external tool) is installed. Install with:  pip install -r requirements-optional.txt
+
+# Advanced binary analysis / emulation
+angr>=9.2.0
+unicorn>=2.0.1
+keystone-engine>=0.9.2
+
+# Dynamic instrumentation (also requires the frida-server on the target)
+frida>=16.0.0
+frida-tools>=11.0.0
+
+# AI decompilation via local transformers model (large download, needs a GPU)
+torch>=2.0.0
+transformers>=4.21.0
+
+# Python bytecode decompilation (supports older Python bytecode only)
+uncompyle6>=3.9.0
+
+# Optional REST API server (src/api/server.py)
+fastapi>=0.100.0
+uvicorn>=0.22.0
+
+# Collaboration sync (src/collaboration/sync_manager.py)
+GitPython>=3.1.0
+
+# Graph export
+pyvis>=0.3.1
+graphviz>=0.20.0
+
+# NOTE: external command-line tools are NOT pip-installable and must be on PATH:
+#   - Ghidra (analyzeHeadless)   for Ghidra decompilation
+#   - retdec-decompiler          for RetDec decompilation
+#   - ollama                     for local LLM decompilation/summary
+#   - mitmproxy / mitmdump       for network capture

@@ -1,4 +1,6 @@
 import openai
+
+
 import logging
 
 class AIAssistant:

@@ -128,6 +128,13 @@ class BinaryLoader:
         """Get the parsed binary information"""
         return self.binary_info
     
+    def cleanup(self):
+        """Explicitly release LIEF objects and force garbage collection."""
+        self.binary = None
+        self.binary_info = {}
+        import gc
+        gc.collect()
+
     def get_sections(self):
         """Get the sections from the binary"""
         return self.binary.sections if self.binary else []

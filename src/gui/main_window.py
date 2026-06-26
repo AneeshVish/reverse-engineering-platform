@@ -13,6 +13,31 @@ import logging
 import time
 import hashlib
 import os
+import sys
+import subprocess
+
+# Thresholds above which decompiled output is written to a file instead of
+# being rendered inline in a QTextEdit (which becomes unresponsive on huge text).
+MAX_DISPLAY_SIZE = 2_000_000   # bytes
+MAX_DISPLAY_LINES = 50_000     # lines
+
+
+def open_path_externally(path):
+    """Open a file with the OS default handler, cross-platform.
+
+    Replaces os.startfile (Windows-only). Returns True on success.
+    """
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)  # noqa: B606 - Windows only
+        elif sys.platform == "darwin":
+            subprocess.run(["open", path], check=False)
+        else:
+            subprocess.run(["xdg-open", path], check=False)
+        return True
+    except Exception:
+        return False
+
 
 from src.core.universal_loader import UniversalLoader
 from src.core.disassembler import DisassemblerEngine, Architecture
@@ -23,8 +48,14 @@ from src.intelligence.threat_intel import ThreatIntelligence, IOCExtractor
 from src.gui.advanced_viewer import AdvancedVisualizationWidget, AIAnalysisPanel
 from src.gui.network_capture_panel import NetworkCapturePanel
 from src.gui.full_software_panel import FullSoftwarePanel
+from src.intelligence.endpoint_detector import detect_endpoints, format_endpoint_results
+from src.gui.project_analysis_tab import ProjectAnalysisTab  # New import for project analysis tab
 
 class BinaryAnalysisWorker(QThread):
+    """
+    Worker thread for analyzing a binary file in the background.
+    Handles loading, section extraction, and disassembly for PE, ELF, and Mach-O binaries.
+    """
     analysis_complete = pyqtSignal(dict)
     progress_update = pyqtSignal(str)
 
@@ -49,22 +80,22 @@ class BinaryAnalysisWorker(QThread):
                 })
                 return
 
-            # UniversalLoader: check file_type
+            # Gather file type and section info
             file_type = getattr(self.binary_loader, 'file_type', None)
             bin_info = {'type': str(file_type), 'path': self.file_path}
             instructions = []
             sections = []
 
-            # Try to extract sections if possible
-            if hasattr(self.binary_loader, 'parsed') and self.binary_loader.parsed is not None:
-                # If parsed is a dict or has sections, try to extract
-                parsed = self.binary_loader.parsed
+            parsed = getattr(self.binary_loader, 'parsed', None)
+            if parsed is not None:
                 if hasattr(parsed, 'sections'):
-                    sections = [{
-                        'name': getattr(s, 'name', ''),
-                        'size': getattr(s, 'size', 0),
-                        'virtual_address': getattr(s, 'virtual_address', 0)
-                    } for s in getattr(parsed, 'sections', [])]
+                    sections = [
+                        {
+                            'name': getattr(s, 'name', ''),
+                            'size': getattr(s, 'size', 0),
+                            'virtual_address': getattr(s, 'virtual_address', 0)
+                        } for s in getattr(parsed, 'sections', [])
+                    ]
                     bin_info['sections'] = sections
                 elif isinstance(parsed, dict) and 'sections' in parsed:
                     sections = parsed['sections']
@@ -74,16 +105,15 @@ class BinaryAnalysisWorker(QThread):
             else:
                 bin_info['sections'] = []
 
-            # Only try disassembly for PE/ELF/MACHO
+            # Disassemble if this is a supported binary type
             if file_type and str(file_type) in ['FileType.PE', 'FileType.ELF', 'FileType.MACHO'] and sections:
-                # --- Initialize disassembler with correct architecture ---
                 arch = None
                 try:
-                    # Try to detect architecture from LIEF parsed binary
-                    parsed = getattr(self.binary_loader, 'parsed', None)
+                    # Try to detect architecture using LIEF header fields
                     if parsed is not None and hasattr(parsed, 'header'):
-                        if hasattr(parsed.header, 'machine_type'):
-                            machine = str(parsed.header.machine_type)
+                        header = parsed.header
+                        if hasattr(header, 'machine_type'):
+                            machine = str(header.machine_type)
                             if 'AMD64' in machine or 'X86_64' in machine:
                                 arch = Architecture.X86_64
                             elif 'I386' in machine or 'X86' in machine:
@@ -92,8 +122,8 @@ class BinaryAnalysisWorker(QThread):
                                 arch = Architecture.ARM64
                             elif 'ARM' in machine:
                                 arch = Architecture.ARM
-                        elif hasattr(parsed.header, 'arch'):
-                            arch_val = str(parsed.header.arch)
+                        elif hasattr(header, 'arch'):
+                            arch_val = str(header.arch)
                             if 'x86_64' in arch_val:
                                 arch = Architecture.X86_64
                             elif 'x86' in arch_val:
@@ -102,13 +132,9 @@ class BinaryAnalysisWorker(QThread):
                                 arch = Architecture.ARM64
                             elif 'arm' in arch_val:
                                 arch = Architecture.ARM
+                    # Fallback if architecture wasn't detected above
                     if arch is None:
-                        # Fallback: guess from file type
-                        if str(file_type) == 'FileType.PE':
-                            arch = Architecture.X86_64
-                        elif str(file_type) == 'FileType.ELF':
-                            arch = Architecture.X86_64
-                        elif str(file_type) == 'FileType.MACHO':
+                        if str(file_type) in ['FileType.PE', 'FileType.ELF', 'FileType.MACHO']:
                             arch = Architecture.X86_64
                     if arch is not None:
                         self.disassembler.initialize(arch)
@@ -117,7 +143,7 @@ class BinaryAnalysisWorker(QThread):
                         print("[DEBUG] Could not detect architecture, skipping disassembly.")
                 except Exception as e:
                     print(f"[DEBUG] Architecture detection/init error: {e}")
-                # --- End disassembler initialization ---
+                # Actually disassemble the code sections
                 for section in sections:
                     if section['name'] in ['.text', '__text', 'CODE']:
                         content = None
@@ -128,10 +154,10 @@ class BinaryAnalysisWorker(QThread):
                                 content,
                                 section.get('virtual_address', 0)
                             )
-                            print(f"[DEBUG] Generated {len(instructions)} instructions")
-            else:
-                # For RAW/unknown files, skip disassembly
-                pass
+                            if instructions:
+                                print(f"[DEBUG] Example instructions: {[i['mnemonic'] for i in instructions[:10]]}")
+                                print(f"[DEBUG] Generated {len(instructions)} instructions")
+            # For unsupported or raw files, we skip disassembly on purpose
 
             self.analysis_complete.emit({
                 'binary_info': bin_info,
@@ -141,40 +167,45 @@ class BinaryAnalysisWorker(QThread):
             })
 
         except Exception as e:
-            print(f"[DEBUG] Critical error: {str(e)}")
+            print(f"[DEBUG] Critical error during binary analysis: {str(e)}")
             self.progress_update.emit(f"Error: {str(e)}")
 
 class DecompileWorker(QThread):
+    """
+    Worker thread for running AI and traditional decompilation in the background.
+    Feeds the analysis log to all registered decompiler engines and collects the results.
+    """
     decompile_complete = pyqtSignal(dict)
     progress_update = pyqtSignal(str)
 
-    def __init__(self, decompiler_manager, assembly_code, file_path):
+    def __init__(self, decompiler_manager, analysis_log, file_path):
         super().__init__()
         self.decompiler_manager = decompiler_manager
-        self.assembly_code = assembly_code
+        self.analysis_log = analysis_log  # Full analysis log for decompilation
         self.file_path = file_path
 
     def run(self):
         try:
             self.progress_update.emit("Starting AI decompilation...")
-            
-            # Run parallel decompilation with multiple engines
+            # Run parallel decompilation with all engines, passing the full analysis log
             results = self.decompiler_manager.decompile_parallel(
-                self.assembly_code, 
+                self.analysis_log,
                 self.file_path
             )
-            
-            # Get consensus result
+            # Try to get a consensus result from all engines
             consensus = self.decompiler_manager.get_consensus_result(results)
             results['consensus'] = consensus
-            
             self.decompile_complete.emit(results)
-            
         except Exception as e:
-            print(f"[DEBUG] Decompilation error: {str(e)}")
+            print(f"[DecompileWorker] Something went wrong during decompilation: {str(e)}")
             self.progress_update.emit(f"Decompilation error: {str(e)}")
 
+
 class ThreatAnalysisWorker(QThread):
+    """
+    Worker thread for running threat intelligence checks on the binary file.
+    Computes the hash and queries the threat intelligence engine.
+    """
     threat_complete = pyqtSignal(dict)
     progress_update = pyqtSignal(str)
 
@@ -186,66 +217,316 @@ class ThreatAnalysisWorker(QThread):
     def run(self):
         try:
             self.progress_update.emit("Analyzing threat intelligence...")
-            
-            # Calculate file hash
+            # Calculate the SHA-256 hash of the file for lookup
             with open(self.file_path, 'rb') as f:
                 file_hash = hashlib.sha256(f.read()).hexdigest()
-            
-            # Analyze against threat intelligence
+            # Query the threat intelligence engine
             threat_results = self.threat_intel.analyze_binary_hash(file_hash)
-            
             self.threat_complete.emit({
                 'hash': file_hash,
                 'results': threat_results
             })
-            
         except Exception as e:
-            print(f"[DEBUG] Threat analysis error: {str(e)}")
+            print(f"[ThreatAnalysisWorker] Threat analysis failed: {str(e)}")
             self.progress_update.emit(f"Threat analysis error: {str(e)}")
 
 class MainWindow(QMainWindow):
+    def compose_analysis_log(self, results):
+        """Compose a full analysis log string from the results dict for AI decompilation."""
+        log = []
+        # Binary info
+        if 'binary_info' in results:
+            log.append("[Binary Info]")
+            for k, v in results['binary_info'].items():
+                log.append(f"{k}: {v}")
+            log.append("")
+        # Sections
+        if 'sections' in results and isinstance(results['sections'], list):
+            log.append("[Sections]")
+            for section in results['sections']:
+                if isinstance(section, dict):
+                    line = ", ".join(f"{k}: {v}" for k, v in section.items())
+                    log.append(line)
+                else:
+                    log.append(str(section))
+            log.append("")
+        # Disassembly
+        if 'disassembly' in results:
+            log.append("[Disassembly]")
+            log.append(results['disassembly'])
+            log.append("")
+        # Any other relevant info
+        for key, value in results.items():
+            if key not in ('binary_info', 'sections', 'disassembly'):
+                log.append(f"[{key.capitalize()}]")
+                log.append(str(value))
+                log.append("")
+        return "\n".join(log)
+
+    def update_progress(self, message):
+        """Update the progress bar and log view with a progress message."""
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setFormat(str(message))
+        if hasattr(self, 'log_view'):
+            self.log_view.append(f"[PROGRESS] {message}")
+
+    def start_binary_analysis(self, file_path):
+        """Start background binary analysis for the selected file."""
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setFormat("Analyzing binary...")
+        if hasattr(self, 'log_view'):
+            self.log_view.append(f"[INFO] Starting analysis for: {file_path}")
+        self.analysis_worker = BinaryAnalysisWorker(self.binary_loader, self.disassembler, file_path)
+        self.analysis_worker.analysis_complete.connect(self.on_analysis_complete)
+        self.analysis_worker.progress_update.connect(self.update_progress)
+        self.analysis_worker.start()
+
+    def configure_misp(self):
+        if hasattr(self, 'log_view'):
+            self.log_view.append('[INFO] MISP configuration not implemented yet.')
+
+    def export_iocs(self):
+        """Export the extracted IOCs (from the Threat Intel panel) to a JSON file."""
+        try:
+            iocs = []
+            if hasattr(self, 'ioc_list'):
+                for i in range(self.ioc_list.topLevelItemCount()):
+                    item = self.ioc_list.topLevelItem(i)
+                    iocs.append({
+                        'type': item.text(0),
+                        'value': item.text(1),
+                        'context': item.text(2),
+                    })
+            if not iocs:
+                if hasattr(self, 'log_view'):
+                    self.log_view.append("[ERROR] No IOCs available to export. Run an analysis first.")
+                return
+            file_path, _ = QFileDialog.getSaveFileName(self, "Export IOCs", "iocs.json", "JSON Files (*.json);;All Files (*)")
+            if file_path:
+                import json
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(iocs, f, indent=2)
+                if hasattr(self, 'log_view'):
+                    self.log_view.append(f"[INFO] Exported {len(iocs)} IOC(s) to {file_path}")
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[ERROR] Failed to export IOCs: {e}")
+
+    def export_analysis(self):
+        """Export the current binary analysis log to a file."""
+        try:
+            analysis_log = None
+            if hasattr(self, 'last_analysis_results') and self.last_analysis_results is not None:
+                analysis_log = self.last_analysis_results.get('analysis_log')
+            if not analysis_log:
+                if hasattr(self, 'log_view'):
+                    self.log_view.append("[ERROR] No analysis log available to export.")
+                return
+            file_path, _ = QFileDialog.getSaveFileName(self, "Export Analysis Log", "analysis_log.txt", "Text Files (*.txt);;All Files (*)")
+            if file_path:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(analysis_log)
+                if hasattr(self, 'log_view'):
+                    self.log_view.append(f"[INFO] Exported analysis log to {file_path}")
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[ERROR] Failed to export analysis log: {e}")
+
+    def ask_ai_about_code(self):
+        """Prompt the user for a question about the code and get an AI answer."""
+        from PyQt6.QtWidgets import QInputDialog, QMessageBox
+        code = self.source_code_view.toPlainText() if hasattr(self, 'source_code_view') else ''
+        if not code.strip():
+            if hasattr(self, 'log_view'):
+                self.log_view.append("[ERROR] No code available for Q&A.")
+            return
+        question, ok = QInputDialog.getText(self, "Ask AI about Code", "Enter your question for the AI:")
+        if not ok or not question.strip():
+            return
+        prompt = (
+            "You are an expert reverse engineer. Given the following C code, answer the user's question as concisely and accurately as possible. "
+            "If the question is about code behavior, security, or vulnerabilities, provide actionable insights.\n\n"
+            f"C code:\n{code}\n\nQuestion: {question}\nAnswer: "
+        )
+        if hasattr(self, 'log_view'):
+            self.log_view.append(f"[INFO] Asking AI: {question}")
+        answer = self.ai_decompiler._decompile_with_ollama(prompt)
+        if hasattr(self, 'log_view'):
+            self.log_view.append(f"[INFO] AI Answer:\n{answer}")
+        QMessageBox.information(self, "AI Q&A", answer)
+
+    def summarize_function_with_ai(self):
+        """Summarize the function currently shown in the Source Code tab using the AI decompiler."""
+        code = self.source_code_view.toPlainText() if hasattr(self, 'source_code_view') else ''
+        if not code.strip():
+            if hasattr(self, 'log_view'):
+                self.log_view.append("[ERROR] No code available to summarize.")
+            return
+        # Optionally prompt for function name
+        from PyQt6.QtWidgets import QInputDialog
+        func_name = ''
+        if hasattr(self, 'log_view'):
+            self.log_view.append("[INFO] Prompting user for function name to summarize (optional)...")
+        func_name, ok = QInputDialog.getText(self, "Summarize Function", "Enter function name to summarize (leave blank for all):")
+        if not ok:
+            return
+        code_to_summarize = code
+        if func_name.strip():
+            # Try to extract the function code by name (very simple heuristic)
+            import re
+            pattern = re.compile(r'(\w[\w\s\*]+\s+' + re.escape(func_name.strip()) + r'\s*\([^)]*\)\s*\{[\s\S]*?^\})', re.MULTILINE)
+            match = pattern.search(code)
+            if match:
+                code_to_summarize = match.group(0)
+            else:
+                if hasattr(self, 'log_view'):
+                    self.log_view.append(f"[WARN] Could not find function '{func_name.strip()}', summarizing all code.")
+        prompt = (
+            f"Summarize the following C code{' for the function ' + func_name.strip() if func_name.strip() else ''}. "
+            "Focus on what the code does, its purpose, and any security-relevant or unusual behavior. "
+            "Output a concise summary for a reverse engineer.\n\n"
+            f"{code_to_summarize}\n"
+        )
+        if hasattr(self, 'log_view'):
+            self.log_view.append("[INFO] Requesting function summary from AI...")
+        summary = self.ai_decompiler._decompile_with_ollama(prompt)
+        if hasattr(self, 'log_view'):
+            self.log_view.append("[INFO] AI Summary:\n" + summary)
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.information(self, "AI Function Summary", summary)
+
+    def export_ai_results(self):
+        """Export the current AI decompilation results from the Source Code tab to a file."""
+        try:
+            code = self.source_code_view.toPlainText() if hasattr(self, 'source_code_view') else ''
+            if not code.strip():
+                if hasattr(self, 'log_view'):
+                    self.log_view.append("[ERROR] No AI decompilation results to export.")
+                return
+            file_path, _ = QFileDialog.getSaveFileName(self, "Export AI Decompilation Results", "ai_decompilation.c", "C Source Files (*.c);;All Files (*)")
+            if file_path:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(code)
+                if hasattr(self, 'log_view'):
+                    self.log_view.append(f"[INFO] Exported AI decompilation results to {file_path}")
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[ERROR] Failed to export AI results: {e}")
+
+    def enhance_with_ai_comments(self):
+        """Enhance the last Ghidra decompilation output with AI comments and improvements."""
+        ghidra_code = None
+        # Try to get the last Ghidra result from last_analysis_results
+        if hasattr(self, 'last_analysis_results') and self.last_analysis_results is not None:
+            ghidra_result = self.last_analysis_results.get('ghidra')
+            if ghidra_result and isinstance(ghidra_result, dict):
+                ghidra_code = ghidra_result.get('code')
+            elif isinstance(ghidra_result, str):
+                ghidra_code = ghidra_result
+        # Fallback to current Source Code tab
+        if not ghidra_code and hasattr(self, 'source_code_view'):
+            ghidra_code = self.source_code_view.toPlainText()
+        if not ghidra_code:
+            if hasattr(self, 'log_view'):
+                self.log_view.append("[ERROR] No Ghidra code available to enhance.")
+            return
+        if hasattr(self, 'log_view'):
+            self.log_view.append("[INFO] Enhancing Ghidra code with AI comments and improvements...")
+        enhanced_code = self.ai_decompiler.enhance_ghidra_output(ghidra_code)
+        if hasattr(self, 'source_code_view'):
+            self.source_code_view.setPlainText(enhanced_code)
+        if hasattr(self, 'log_view'):
+            self.log_view.append("[INFO] Enhanced code displayed in Source Code tab.")
+
+    def reanalyze_with_ai(self):
+        """Re-run AI decompilation using the last analysis log or current disassembly view."""
+        analysis_log = None
+        if hasattr(self, 'last_analysis_results') and self.last_analysis_results is not None:
+            analysis_log = self.last_analysis_results.get('analysis_log')
+        if not analysis_log and hasattr(self, 'disassembly_view'):
+            analysis_log = self.disassembly_view.toPlainText()
+        if not analysis_log:
+            if hasattr(self, 'log_view'):
+                self.log_view.append("[ERROR] No analysis log available for AI decompilation.")
+            return
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.setVisible(True)
+        if hasattr(self, 'log_view'):
+            self.log_view.append("[INFO] Re-running AI decompilation...")
+        self.decompile_worker = DecompileWorker(
+            self.decompiler_manager,
+            analysis_log,
+            self.current_file_path
+        )
+        self.decompile_worker.decompile_complete.connect(self.on_decompile_complete)
+        self.decompile_worker.progress_update.connect(self.update_progress)
+        self.decompile_worker.start()
+
+    def open_file(self):
+        """Open a binary file and start analysis."""
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Binary File", "", "All Files (*)")
+        if file_path:
+            self.current_file_path = file_path
+            if hasattr(self, 'file_label'):
+                self.file_label.setText(file_path)
+            self.log_view.append(f"[INFO] Opened file: {file_path}")
+            # Start binary analysis
+            self.start_binary_analysis(file_path)
+
     def __init__(self, settings, plugin_manager):
-        # ... (existing code)
-        pass  # placeholder for context
         super().__init__()
         self.settings = settings
         self.plugin_manager = plugin_manager
         self.binary_loader = UniversalLoader()
         self.disassembler = DisassemblerEngine()
         self.current_file_path = None
-        
-        # Initialize AI components
-        self.ai_decompiler = AIDecompiler(model_type="ollama")
+        # Initialize AI components and threat intelligence BEFORE any UI logic
+        self.ai_decompiler = AIDecompiler()
         self.decompiler_manager = DecompilerManager()
         self.decompiler_manager.register_engine(
             DecompilerEngine.LLM4DECOMPILE, 
             self.ai_decompiler
         )
-        # Map model combo index to AIDecompiler model_type
-        self.model_type_map = {
-            0: "ollama",
-            1: "huggingface",
-            2: "openai"
-        }
-        
-        # Initialize threat intelligence
         self.threat_intel = ThreatIntelligence()
         self.ioc_extractor = IOCExtractor()
-        
-        self.setWindowTitle("Reverse Engineering Platform")
-        # Set a safe default window size and min/max
-        self.setMinimumSize(1000, 600)
-        self.resize(1200, 800)
-        screen = self.screen() or self.window().screen() if hasattr(self, 'window') else None
-        if screen:
-            screen_size = screen.availableGeometry().size()
-            max_width = min(1920, screen_size.width())
-            max_height = min(1080, screen_size.height())
-            self.setMaximumSize(max_width, max_height)
+        self._welcome_screen_shown = False
+        self._main_ui_initialized = False
+        self.show_welcome_screen()
+
+    def show_welcome_screen(self):
+        if self._welcome_screen_shown:
+            return
+        self._welcome_screen_shown = True
+        from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QMessageBox
+        from PyQt6.QtCore import Qt
+        self.welcome_widget = QWidget()
+        layout = QVBoxLayout()
+        label = QLabel("<h2>Welcome to the Reverse Engineering Platform</h2>\n<p style='font-size:16px;'>Choose your mode:</p>")
+        label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(label)
+        btn_cracking = QPushButton("Cracking")
+        btn_security = QPushButton("Security")
+        btn_cracking.setMinimumHeight(40)
+        btn_security.setMinimumHeight(40)
+        btn_cracking.setStyleSheet("font-size:16px;")
+        btn_security.setStyleSheet("font-size:16px;")
+        layout.addWidget(btn_cracking)
+        layout.addWidget(btn_security)
+        self.welcome_widget.setLayout(layout)
+        self.setCentralWidget(self.welcome_widget)
+        btn_cracking.clicked.connect(self.launch_main_ui)
+        btn_security.clicked.connect(self.launch_security_mode)
+
+    def launch_main_ui(self):
+        if self._main_ui_initialized:
+            return
+        self._main_ui_initialized = True
+        self.welcome_widget.hide()
         self.init_ui()
         self.setup_menu()
         self.setup_status_bar()
-
+        # Restore the original main window stylesheet
         self.setStyleSheet("""
             QWidget {
                 background-color: #232629;
@@ -311,9 +592,66 @@ class MainWindow(QMainWindow):
             }
         """)
 
+    def launch_security_mode(self):
+        import subprocess, sys, os
+        # Find the path to the security GUI
+        # Corrected path: use project root, not src/
+        # Robust path: always go two levels up from this file (src/gui/) to project root
+        gui_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'ultimate_file_protection', 'gui.py'))
+        python_exe = sys.executable
+        try:
+            subprocess.Popen([python_exe, gui_path])
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Security Mode Error", f"Failed to launch Security GUI:\n{str(e)}")
+
+        # Initialize AI components
+        self.ai_decompiler = AIDecompiler()
+        self.decompiler_manager = DecompilerManager()
+        self.decompiler_manager.register_engine(
+            DecompilerEngine.LLM4DECOMPILE, 
+            self.ai_decompiler
+        )
+        # Map model combo index to AIDecompiler model_type
+        # Only Ollama is supported for AI decompilation
+        
+        # Initialize threat intelligence
+        self.threat_intel = ThreatIntelligence()
+        self.ioc_extractor = IOCExtractor()
+        
+        self.setWindowTitle("Reverse Engineering Platform")
+        # Set a safe default window size and min/max
+        self.setMinimumSize(1000, 600)
+        self.resize(1200, 800)
+        screen = self.screen() or self.window().screen() if hasattr(self, 'window') else None
+        if screen:
+            screen_size = screen.availableGeometry().size()
+            safe_width = min(1200, screen_size.width())
+            safe_height = min(800, screen_size.height())
+            min_width = min(900, screen_size.width())
+            min_height = min(600, screen_size.height())
+            self.setMinimumSize(min_width, min_height)
+            self.setMaximumSize(screen_size.width(), screen_size.height())
+            self.resize(safe_width, safe_height)
+        else:
+            self.setMinimumSize(900, 600)
+            self.resize(1200, 800)
+        # The init_ui, setup_menu, setup_status_bar, and stylesheet are now called in launch_main_ui after welcome screen
+
     def init_ui(self):
         self.setWindowTitle("Ultimate Reverse Engineering Platform")
-        self.setGeometry(100, 100, 1600, 1000)
+        # Only set geometry if it fits the screen
+        screen = self.screen() or self.window().screen() if hasattr(self, 'window') else None
+        if screen:
+            screen_size = screen.availableGeometry()
+            width = min(1200, screen_size.width())
+            height = min(800, screen_size.height())
+            x = screen_size.x() + 100
+            y = screen_size.y() + 100
+            self.setGeometry(x, y, width, height)
+        else:
+            self.setGeometry(100, 100, 1200, 800)
+
 
         # Central widget with splitter
         central_widget = QWidget()
@@ -349,11 +687,33 @@ class MainWindow(QMainWindow):
                 self.log_view.append(f"[INFO] Log file saved to {file_path}")
                 # Try to open the file automatically for user
                 try:
-                    os.startfile(file_path)
+                    open_path_externally(file_path)
                 except Exception:
                     pass
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to save log file: {e}")
+
+    def download_disassembly(self):
+        """Download the disassembly output to a file chosen by the user."""
+        try:
+            disassembly_text = self.disassembly_view.toPlainText()
+            if not disassembly_text.strip():
+                if hasattr(self, 'log_view'):
+                    self.log_view.append("[ERROR] No disassembly available to export.")
+                return
+            file_path, _ = QFileDialog.getSaveFileName(self, "Save Disassembly", f"disassembly_{time.strftime('%Y%m%d_%H%M%S')}.txt", "Text Files (*.txt);;All Files (*)")
+            if file_path:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(disassembly_text)
+                if hasattr(self, 'log_view'):
+                    self.log_view.append(f"[INFO] Disassembly exported to {file_path}")
+                try:
+                    open_path_externally(file_path)
+                except Exception:
+                    pass
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[ERROR] Failed to export disassembly: {e}")
 
     def create_center_panel(self):
         center_widget = QWidget()
@@ -363,10 +723,23 @@ class MainWindow(QMainWindow):
         self.analysis_tabs = QTabWidget()
 
         # Disassembly view
+        disassembly_tab_widget = QWidget()
+        disassembly_layout = QVBoxLayout(disassembly_tab_widget)
         self.disassembly_view = QTextEdit()
         self.disassembly_view.setReadOnly(True)
         self.disassembly_view.setFont(QFont("Consolas", 9))
-        self.analysis_tabs.addTab(self.disassembly_view, "Disassembly")
+        disassembly_layout.addWidget(self.disassembly_view)
+        # Add Download Disassembly button
+        self.download_disassembly_btn = QPushButton("Download Disassembly")
+        disassembly_layout.addWidget(self.download_disassembly_btn)
+        self.download_disassembly_btn.clicked.connect(self.download_disassembly)
+        self.analysis_tabs.addTab(disassembly_tab_widget, "Disassembly")
+
+        # Endpoint Detection tab (new)
+        self.endpoint_detection_view = QTextEdit()
+        self.endpoint_detection_view.setReadOnly(True)
+        self.endpoint_detection_view.setFont(QFont("Consolas", 9))
+        self.analysis_tabs.addTab(self.endpoint_detection_view, "Endpoint Detection")
 
         # Source Code tab (for AI/traditional decompilation results)
         self.source_code_view = QTextEdit()
@@ -460,27 +833,23 @@ class MainWindow(QMainWindow):
         self.download_log_btn.clicked.connect(self.download_log_file)
         self.analysis_tabs.addTab(log_tab_widget, "Analysis Log")
         
+        # Project Analysis tab (new)
+        self.project_analysis_tab = ProjectAnalysisTab()
+        self.analysis_tabs.addTab(self.project_analysis_tab, "Project Analysis")
+        
         layout.addWidget(self.analysis_tabs)
         return center_widget
 
     def on_model_changed(self):
-        """Handle AI model selection change from the combo box."""
-        model_type_map = {
-            0: "ollama",
-            1: "huggingface",
-            2: "openai"
-        }
-        model_type = model_type_map.get(index, "ollama")
-        # Only update if changed
-        if getattr(self, 'ai_decompiler', None) is not None and getattr(self.ai_decompiler, 'model_type', None) != model_type:
-            # Recreate and re-register the AI decompiler with the new model type
-            self.ai_decompiler = AIDecompiler(model_type=model_type)
-            self.decompiler_manager.register_engine(
-                DecompilerEngine.LLM4DECOMPILE,
-                self.ai_decompiler
-            )
-            if hasattr(self, 'log_view'):
-                self.log_view.append(f"[INFO] Switched AI model to: {self.model_combo.currentText()}")
+        """Handle AI model selection change from the combo box (Ollama only)."""
+        # Only Ollama is supported, so just re-instantiate for future extensibility
+        self.ai_decompiler = AIDecompiler()
+        self.decompiler_manager.register_engine(
+            DecompilerEngine.LLM4DECOMPILE,
+            self.ai_decompiler
+        )
+        if hasattr(self, 'log_view'):
+            self.log_view.append(f"[INFO] Switched AI model to: Ollama (Local)")
 
     def setup_status_bar(self):
         self.status_bar = QStatusBar()
@@ -524,7 +893,7 @@ class MainWindow(QMainWindow):
         
         settings_layout.addWidget(QLabel("AI Model:"))
         self.model_combo = QComboBox()
-        self.model_combo.addItems(["Ollama (Local)", "HuggingFace", "OpenAI GPT-4"])
+        self.model_combo.addItems(["Ollama (Local)"])
         self.model_combo.setCurrentIndex(0)
         self.model_combo.currentIndexChanged.connect(self.on_model_changed)
         settings_layout.addWidget(self.model_combo)
@@ -533,9 +902,6 @@ class MainWindow(QMainWindow):
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_edit.setPlaceholderText("Enter your OpenAI API key here")
         settings_layout.addWidget(self.api_key_edit)
-        self.save_api_btn = QPushButton("Save API Key")
-        settings_layout.addWidget(self.save_api_btn)
-        self.save_api_btn.clicked.connect(self.save_openai_api_key)
         
         settings_layout.addWidget(QLabel("Visualization Options:"))
         self.entropy_cb = QCheckBox("Show Entropy Analysis")
@@ -601,15 +967,22 @@ class MainWindow(QMainWindow):
         try:
             from src.gui.cfg_viewer import CFGViewer
             # Parse instructions from disassembly view
-            disasm_text = self.disassembly_view.toPlainText()
-            lines = disasm_text.strip().splitlines()
+            # Extract instructions from DisassemblyView table
             instructions = []
-            for idx, line in enumerate(lines):
-                # Naive parsing: assume format 'mnemonic operands'
-                parts = line.strip().split(None, 1)
-                mnemonic = parts[0] if parts else ''
-                op_str = parts[1] if len(parts) > 1 else ''
-                instructions.append({'address': idx, 'mnemonic': mnemonic, 'op_str': op_str})
+            if hasattr(self.disassembly_view, 'table'):
+                table = self.disassembly_view.table
+                for row in range(table.rowCount()):
+                    address_item = table.item(row, 0)
+                    mnemonic_item = table.item(row, 2)
+                    operands_item = table.item(row, 3)
+                    if address_item and mnemonic_item and operands_item:
+                        try:
+                            address = int(address_item.text(), 16)
+                        except Exception:
+                            address = row
+                        mnemonic = mnemonic_item.text()
+                        op_str = operands_item.text()
+                        instructions.append({'address': address, 'mnemonic': mnemonic, 'op_str': op_str})
             if not instructions:
                 self.log_view.append("[WARN] No instructions to visualize for CFG.")
                 return
@@ -642,7 +1015,7 @@ class MainWindow(QMainWindow):
                 ])
                 ai_decompiler = getattr(self, 'ai_decompiler', None)
                 if not ai_decompiler:
-                    ai_decompiler = AIDecompiler(model_type="ollama")
+                    ai_decompiler = AIDecompiler()
                 pseudo = ai_decompiler.decompile_assembly(assembly_code)
                 self.pseudocode_view.setPlainText(pseudo)
             else:
@@ -662,7 +1035,7 @@ class MainWindow(QMainWindow):
         try:
             loader = UniversalLoader()
             if not loader.load(self.current_file_path):
-                self.decompile_view.setPlainText("[ERROR] Could not load binary for decompilation.")
+                self.source_code_view.setPlainText("[ERROR] Could not load binary for decompilation.")
                 return
             parsed = loader.parsed
             sections = getattr(parsed, 'sections', []) if hasattr(parsed, 'sections') else []
@@ -677,17 +1050,17 @@ class MainWindow(QMainWindow):
                         for instr in instructions:
                             all_code += f"{instr['mnemonic']} {instr['op_str']}\n"
             if not all_code.strip():
-                self.decompile_view.setPlainText("[ERROR] Could not extract assembly for decompilation.")
+                self.source_code_view.setPlainText("[ERROR] Could not extract assembly for decompilation.")
                 return
-            self.decompile_view.setPlainText("[INFO] Running AI decompilation...\n(This may take a minute for large binaries)")
+            self.source_code_view.setPlainText("[INFO] Running AI decompilation...\n(This may take a minute for large binaries)")
             QApplication.processEvents()
-            result = ai_decompiler.decompile_assembly(all_code)
+            result = self.ai_decompiler.decompile_assembly(all_code)
             # If AI fails, fallback to RetDec/Ghidra
             if not result or 'decompilation failed' in result.lower() or 'error' in result.lower() or result.strip() == '':
-                self.decompile_view.setPlainText("[WARN] AI decompilation failed or incomplete. Falling back to RetDec/Ghidra.")
+                self.source_code_view.setPlainText("[WARN] AI decompilation failed or incomplete. Falling back to RetDec/Ghidra.")
                 retdec_result = self.decompiler_manager._run_retdec(self.current_file_path)
                 if retdec_result and 'error' not in retdec_result.lower() and 'failed' not in retdec_result.lower():
-                    self.decompile_view.setPlainText(retdec_result)
+                    self.source_code_view.setPlainText(retdec_result)
                 else:
                     ghidra_result = self.decompiler_manager._run_ghidra(self.current_file_path)
                     if ghidra_result and 'error' not in ghidra_result.lower() and 'failed' not in ghidra_result.lower():
@@ -695,38 +1068,38 @@ class MainWindow(QMainWindow):
                             output_path = os.path.join(os.getcwd(), "output_full_decompile_ghidra.c")
                             with open(output_path, "w", encoding="utf-8", errors="replace") as f:
                                 f.write(ghidra_result)
-                            self.decompile_view.setPlainText(f"[INFO] Decompiled code too large to display. Saved to {output_path}.")
+                            self.source_code_view.setPlainText(f"[INFO] Decompiled code too large to display. Saved to {output_path}.")
                             self.log_view.append(f"[INFO] Decompiled code saved to {output_path}.")
                             self.show_open_output_button(output_path)
                             try:
                                 import os
-                                os.startfile(output_path)
+                                open_path_externally(output_path)
                             except Exception as e:
                                 from PyQt6.QtWidgets import QMessageBox
                                 QMessageBox.warning(self, "Open Output Failed", f"Could not open output file automatically: {e}")
                         else:
-                            self.decompile_view.setPlainText(ghidra_result)
+                            self.source_code_view.setPlainText(ghidra_result)
                             self.log_view.append("[INFO] Source Code tab updated with Ghidra C decompilation.")
                     else:
-                        self.decompile_view.setPlainText("[ERROR] All decompilation engines failed. Please check logs.")
+                        self.source_code_view.setPlainText("[ERROR] All decompilation engines failed. Please check logs.")
                         self.log_view.append("[ERROR] All decompilation engines failed.")
             else:
                 if len(result.encode('utf-8')) > MAX_DISPLAY_SIZE or result.count('\n') > MAX_DISPLAY_LINES:
                     output_path = os.path.join(os.getcwd(), "output_full_decompile_ai.c")
                     with open(output_path, "w", encoding="utf-8", errors="replace") as f:
                         f.write(result)
-                    self.decompile_view.setPlainText(f"[INFO] Decompiled code too large to display. Saved to {output_path}.")
+                    self.source_code_view.setPlainText(f"[INFO] Decompiled code too large to display. Saved to {output_path}.")
                     self.log_view.append(f"[WARN] Decompiled code too large to display. Saved to {output_path}.")
                     self.show_open_output_button(output_path)
                     # Auto-open the output file for user
                     try:
                         import os
-                        os.startfile(output_path)
+                        open_path_externally(output_path)
                     except Exception as e:
                         from PyQt6.QtWidgets import QMessageBox
                         QMessageBox.warning(self, "Open Output Failed", f"Could not open output file automatically: {e}")
                 else:
-                    self.decompile_view.setPlainText(result)
+                    self.source_code_view.setPlainText(result)
                     self.log_view.append("[INFO] Decompilation complete")
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
@@ -737,33 +1110,32 @@ class MainWindow(QMainWindow):
     def on_decompile_complete(self, results):
         # Update AI analysis panel with results as before
         self.ai_analysis_panel.update_analysis_results(results)
-        # Strictly use only offline (Ghidra/RetDec) results for Source Code tab
+        # Try to show Ghidra/RetDec, but if they fail, show AI (Ollama) output if available
         ghidra_result = results.get('ghidra', {})
         retdec_result = results.get('retdec', {})
+        ai_result = results.get(getattr(self.decompiler_manager, 'DecompilerEngine', None).LLM4DECOMPILE if hasattr(self.decompiler_manager, 'DecompilerEngine') else 'llm4decompile', {})
+        # Fallback: try string key if enum is not available
+        if not ai_result:
+            ai_result = results.get('llm4decompile', {})
+            if not ai_result:
+                # Try enum type if present
+                from src.core.decompiler_manager import DecompilerEngine
+                ai_result = results.get(DecompilerEngine.LLM4DECOMPILE, {})
         code = None
         engine_used = None
-        # Prefer Ghidra, fallback to RetDec
+        # Prefer Ghidra, then RetDec, then AI (Ollama)
         if ghidra_result.get('success') and ghidra_result.get('code') and 'error' not in ghidra_result.get('code', '').lower() and 'failed' not in ghidra_result.get('code', '').lower():
             code = ghidra_result['code']
             engine_used = 'Ghidra'
         elif retdec_result.get('success') and retdec_result.get('code') and 'error' not in retdec_result.get('code', '').lower() and 'failed' not in retdec_result.get('code', '').lower():
             code = retdec_result['code']
             engine_used = 'RetDec'
+        elif ai_result.get('success') and ai_result.get('code'):
+            code = ai_result['code']
+            engine_used = 'Ollama AI'
         else:
-            # Fallback: try running again directly in case results dict is missing
-            self.log_view.append("[WARN] Both Ghidra and RetDec results missing or failed in results dict. Running engines directly.")
-            ghidra_code = self.decompiler_manager._run_ghidra(self.current_file_path)
-            if ghidra_code and 'error' not in ghidra_code.lower() and 'failed' not in ghidra_code.lower():
-                code = ghidra_code
-                engine_used = 'Ghidra (direct)'
-            else:
-                retdec_code = self.decompiler_manager._run_retdec(self.current_file_path)
-                if retdec_code and 'error' not in retdec_code.lower() and 'failed' not in retdec_code.lower():
-                    code = retdec_code
-                    engine_used = 'RetDec (direct)'
-                else:
-                    code = "[ERROR] All offline decompilation engines failed. No C code available."
-                    engine_used = 'None'
+            code = "[ERROR] All decompilation engines failed. No C code available."
+            engine_used = 'None'
         # Chunked, non-blocking loading for very large code output
         from PyQt6.QtCore import QTimer
         self.source_code_view.clear()
@@ -778,7 +1150,8 @@ class MainWindow(QMainWindow):
             start = self._source_code_chunk_index
             end = min(start + chunk_size, total_lines)
             chunk = ''.join(code_lines[start:end])
-            self.source_code_view.moveCursor(self.source_code_view.textCursor().End)
+            from PyQt6.QtGui import QTextCursor
+            self.source_code_view.moveCursor(QTextCursor.MoveOperation.End)
             self.source_code_view.insertPlainText(chunk)
             self._source_code_chunk_index = end
             if hasattr(self, 'progress_bar'):
@@ -788,12 +1161,111 @@ class MainWindow(QMainWindow):
             else:
                 if hasattr(self, 'progress_bar'):
                     self.progress_bar.setVisible(False)
+
         append_next_chunk()
+
+        # Check if output is not valid C code and warn the user (for AI output or others)
+        c_code = self.source_code_view.toPlainText()
+        c_keywords = ['#include', 'int main', 'void ', 'char ', 'struct ', 'return ', 'printf', 'scanf']
+        is_valid_c = any(keyword in c_code for keyword in c_keywords)
+        is_generic = False
+        # Heuristic: if code is just wrappers or has too many asm/volatile/extern lines, or function names are just instruction mnemonics
+        suspicious_patterns = [
+            'extern "C" void', '__asm__', 'volatile', 'mov_', 'call_', 'jmp_', 'test_', 'push_', 'pop_', 'ret()', 'add_', 'sub_', 'xor_', 'and_', 'or_', 'shr_', 'shl_', 'ror_', 'rol_'
+        ]
+        generic_count = sum(pattern in c_code for pattern in suspicious_patterns)
+        if not is_valid_c or generic_count >= 3:
+            is_generic = True
+            if hasattr(self, 'log_view'):
+                self.log_view.append("[WARNING] The output does not appear to be valid C code. It may be an explanation, generic wrappers, or hallucinated code instead of real decompiled source.")
+                self.log_view.append("[ADVICE] If this is an AI result, try using a simpler or unpacked binary. If the binary is packed (e.g., UPX), unpack it and retry. If using a custom model, ensure it is trained for binary-to-C translation.")
+            self.source_code_view.append("\n// [WARNING] The output does not appear to be valid C code. It may be an explanation, generic wrappers, or hallucinated code instead of real decompiled source.\n")
+            self.source_code_view.append("// [ADVICE] Try using a simpler or unpacked binary. If the binary is packed (e.g., UPX), unpack it and retry.\n")
+
+        # --- Analysis log error/missing check for AI decompilation ---
+        if hasattr(self, 'last_analysis_results'):
+            analysis_log = self.last_analysis_results.get('analysis_log', '')
+            binary_path = getattr(self, 'current_file_path', None)
+            upx_detected = False
+            # If the analysis log is mostly errors or missing sections, block AI decompilation and show a warning
+            error_lines = [l for l in analysis_log.splitlines() if any(
+                err in l.lower() for err in [
+                    'unable to find the section',
+                    'can\'t read',
+                    'failed',
+                    'error',
+                    'incomplete',
+                    'not found',
+                    'missing',
+                    'parse',
+                    'exception',
+                    'no program loaded',
+                    'not supported',
+                    'unsupported',
+                    'not implemented'
+                ])]
+            non_empty_lines = [l for l in analysis_log.splitlines() if l.strip()]
+            if len(non_empty_lines) > 0 and len(error_lines) / len(non_empty_lines) > 0.6:
+                # More than 60% of the log is errors: block AI decompilation
+                if hasattr(self, 'log_view'):
+                    self.log_view.append("[FATAL] The analysis log is mostly errors or missing sections. AI decompilation is blocked because results will be meaningless.\nPlease unpack, fix the binary, or use a different file.")
+                self.source_code_view.setPlainText("// [FATAL] The analysis log is mostly errors or missing sections. AI decompilation is blocked because results will be meaningless.\n// Please unpack, fix the binary, or use a different file.\n")
+                # Optionally, early return here to block further display
+                return
+            # --- UPX/packer detection as before ---
+            if any(packer in analysis_log.lower() for packer in ['upx', 'packed', 'packer', 'aspack', 'petite', 'fsg']):
+                upx_detected = True
+            else:
+                try:
+                    from src.core.ai_decompiler import AIDecompiler
+                    if binary_path and AIDecompiler.is_upx_packed(binary_path):
+                        upx_detected = True
+                except Exception:
+                    pass
+            if upx_detected:
+                if hasattr(self, 'log_view'):
+                    self.log_view.append("[WARNING] This binary appears to be packed (e.g., with UPX or another packer). Please unpack it before attempting AI decompilation for best results.")
+                    try:
+                        from src.core.ai_decompiler import AIDecompiler
+                        unpacked_path = AIDecompiler.auto_unpack_upx(binary_path) if binary_path else None
+                        if unpacked_path:
+                            self.log_view.append(f"[INFO] The binary was auto-unpacked to {unpacked_path}. Please re-run analysis on this file for improved AI results.")
+                        else:
+                            self.log_view.append("[INFO] UPX was not found or auto-unpack failed. Please unpack manually with 'upx -d <file>' and retry.")
+                    except Exception:
+                        self.log_view.append("[INFO] UPX auto-unpack check failed. Please unpack manually if needed.")
+                self.source_code_view.append("// [WARNING] This binary appears to be packed (e.g., with UPX or another packer). Please unpack it before attempting AI decompilation for best results.\n")
+        # --- Add analysis log viewer button/panel ---
+        if not hasattr(self, 'analysis_log_viewer_btn'):
+            from PyQt6.QtWidgets import QPushButton, QDialog, QVBoxLayout, QTextEdit
+            def show_analysis_log():
+                dlg = QDialog(self)
+                dlg.setWindowTitle("Analysis Log Viewer")
+                layout = QVBoxLayout()
+                txt = QTextEdit()
+                txt.setReadOnly(True)
+                txt.setPlainText(self.last_analysis_results.get('analysis_log', 'No analysis log available.'))
+                layout.addWidget(txt)
+                dlg.setLayout(layout)
+                dlg.resize(900, 600)
+                dlg.exec()
+            self.analysis_log_viewer_btn = QPushButton("View Analysis Log", self)
+            self.analysis_log_viewer_btn.clicked.connect(show_analysis_log)
+            if hasattr(self, 'log_view'):
+                self.log_view.append("[INFO] You can view the raw analysis log by clicking the 'View Analysis Log' button below the log panel.")
+            # Add the button to the main window layout (if not already present)
+            if hasattr(self, 'log_view') and hasattr(self.log_view, 'parentWidget'):
+                parent = self.log_view.parentWidget()
+                if hasattr(parent, 'layout') and parent.layout():
+                    parent.layout().addWidget(self.analysis_log_viewer_btn)
+
+
         if engine_used and engine_used != 'None':
             self.log_view.append(f"[INFO] Source Code tab updated with {engine_used} C decompilation.")
+            self.log_view.append(f"[INFO] Decompilation complete ({engine_used})")
         else:
-            self.log_view.append("[ERROR] All offline decompilation engines failed. No C code available.")
-        self.log_view.append("[INFO] Decompilation complete (offline engines only for Source Code tab)")
+            self.log_view.append("[ERROR] All decompilation engines failed. No C code available.")
+            self.log_view.append("[INFO] Decompilation complete")
 
     def setup_menu(self):
         menubar = self.menuBar()
@@ -833,350 +1305,99 @@ class MainWindow(QMainWindow):
         Update the UI with binary analysis results.
         """
         self.progress_bar.setVisible(False)
-        bin_info = results.get('binary_info', {})
         instructions = results.get('instructions', [])
-        # Show disassembly or debug info
-        if bin_info.get('type', '').lower() == 'unknown':
-            self.disassembly_view.setPlainText('[DEBUG] Starting binary analysis...\nUnknown format')
-        else:
-            # Try to show Ghidra decompilation output in the disassembly view first
-            ghidra_result = self.decompiler_manager._run_ghidra(self.current_file_path)
-            # DEBUG: Always log the full Ghidra output for troubleshooting
-            self.log_view.append('[DEBUG] Raw Ghidra output:\n' + (ghidra_result.strip() if ghidra_result else '[None]'))
-            if ghidra_result and 'error' not in ghidra_result.lower() and 'failed' not in ghidra_result.lower() and ghidra_result.strip():
-                self.disassembly_view.setPlainText('[GHIDRA C DECOMPILATION OUTPUT]\n' + ghidra_result.strip())
-                self.log_view.append('[INFO] Disassembly view updated with Ghidra C decompilation.')
-            else:
-                # Fallback: Display raw assembly instructions
-                if instructions:
-                    disasm_text = '\n'.join([
-                        f"{instr.get('address', ''):08X}: {instr.get('mnemonic', '')} {instr.get('op_str', '')}".strip()
-                        for instr in instructions
-                    ])
-                    self.disassembly_view.setPlainText(disasm_text)
-                    self.log_view.append('[INFO] Disassembly view updated with raw assembly.')
+        # Compose a full analysis log string for AI decompilation
+        if hasattr(self, 'log_view'):
+            self.log_view.append("[WARNING] This binary appears to be packed (e.g., with UPX or another packer). Please unpack it before attempting AI decompilation for best results.")
+            try:
+                from src.core.ai_decompiler import AIDecompiler
+                unpacked_path = AIDecompiler.auto_unpack_upx(binary_path) if binary_path else None
+                if unpacked_path:
+                    self.log_view.append(f"[INFO] The binary was auto-unpacked to {unpacked_path}. Please re-run analysis on this file for improved AI results.")
                 else:
-                    self.disassembly_view.setPlainText('[INFO] No instructions found for this binary.')
-                    self.log_view.append('[WARN] No instructions found for this binary.')
+                    self.log_view.append("[INFO] UPX was not found or auto-unpack failed. Please unpack manually with 'upx -d <file>' and retry.")
+            except Exception:
+                self.log_view.append("[INFO] UPX auto-unpack check failed. Please unpack manually if needed.")
+        self.source_code_view.append("// [WARNING] This binary appears to be packed (e.g., with UPX or another packer). Please unpack it before attempting AI decompilation for best results.\n")
 
-        # Start AI decompilation if enabled
+        # Show plain disassembly in the format 'address: mnemonic operands'
+        disasm_lines = []
+        for instr in instructions:
+            addr = f"{instr['address']:08x}"
+            line = f"{addr}: {instr['mnemonic']}"
+            if instr['op_str']:
+                line += f" {instr['op_str']}"
+            disasm_lines.append(line)
+        self.disassembly_view.setPlainText('\n'.join(disasm_lines))
+
+        # --- Endpoint Detection: always generate and display report in Endpoint Detection tab ---
+        endpoint_results = format_endpoint_results(detect_endpoints(disasm_lines))
+        self.endpoint_detection_view.setPlainText(endpoint_results)
+
+        # Restore detailed log info as before
+        if hasattr(self, 'log_view'):
+            bin_info = results.get('binary_info', {})
+            self.log_view.append('[INFO] Analysis complete.')
+            if bin_info:
+                self.log_view.append(f"[INFO] Architecture: {bin_info.get('arch', 'Unknown')}")
+                self.log_view.append(f"[INFO] Entry point: {bin_info.get('entry_point', 'Unknown')}")
+                self.log_view.append(f"[INFO] Sections: {[s['name'] for s in results.get('sections', [])]}")
+            self.log_view.append(f"[INFO] Disassembly view updated with {len(instructions)} instructions.")
+            # Append C decompilation output (always) using Ghidra, not AI
+            try:
+                ghidra_result = self.decompiler_manager._run_ghidra(self.current_file_path)
+                # Extract only actual C code blocks from Ghidra output
+                c_blocks = []
+                if ghidra_result:
+                    lines = ghidra_result.splitlines()
+                    current_block = []
+                    inside_c = False
+                    for line in lines:
+                        # Skip banners, decompiling lines, and separators
+                        if line.strip().startswith("Decompiling:") or line.strip().startswith("[ERROR]"):
+                            continue
+                        if line.strip() == "=" * 60 or line.strip() == "=" or line.strip() == "":
+                            if current_block:
+                                c_blocks.append("\n".join(current_block).strip())
+                                current_block = []
+                            inside_c = False
+                            continue
+                        # Most C code lines contain ';', '{', '}', or comments
+                        if any(x in line for x in [';', '{', '}', '//', '#include', 'return', 'int ', 'void ', 'char ', 'float ', 'double ', 'if(', 'for(', 'while(']):
+                            inside_c = True
+                        if inside_c:
+                            current_block.append(line)
+                    # Append last block
+                    if current_block:
+                        c_blocks.append("\n".join(current_block).strip())
+                c_code = "\n\n".join([b for b in c_blocks if len(b) > 20])  # Only keep non-trivial blocks
+                self.log_view.append('[C DECOMPILATION OUTPUT]')
+                if c_code:
+                    self.log_view.append(c_code)
+                else:
+                    # If Ghidra returned an error, show it
+                    if ghidra_result and ('error' in ghidra_result.lower() or 'failed' in ghidra_result.lower()):
+                        self.log_view.append(ghidra_result.strip())
+                    else:
+                        self.log_view.append('[ERROR] Ghidra decompilation failed or returned no usable C code.')
+            except Exception as e:
+                self.log_view.append(f'[ERROR] Ghidra decompilation failed: {e}')
+        # --- Compose analysis log for AI decompilation ---
+        analysis_log = self.compose_analysis_log(results)
+        results['analysis_log'] = analysis_log  # Store for later use
+        self.last_analysis_results = results
+        # NOTE: C decompilation is handled asynchronously by DecompileWorker below.
+        # The previous synchronous decompile_parallel() call here blocked the UI
+        # thread for up to 5 minutes and returned nothing usable ('consensus' is
+        # not a key of decompile_parallel's result), so it was removed.
+        # If AI decompilation is checked, start the async worker for the Source Code tab
         if self.ai_decompile_cb.isChecked():
-            assembly_code = "\n".join([
-                f"{instr['mnemonic']} {instr['op_str']}"
-                for instr in instructions
-            ])
-            
             self.decompile_worker = DecompileWorker(
                 self.decompiler_manager,
-                assembly_code,
+                analysis_log,
                 self.current_file_path
             )
-        self.decompile_worker.decompile_complete.connect(self.on_decompile_complete)
-        self.decompile_worker.progress_update.connect(self.update_progress)
-        self.decompile_worker.start()
-        
+            self.decompile_worker.decompile_complete.connect(self.on_decompile_complete)
+            self.decompile_worker.progress_update.connect(self.update_progress)
+            self.decompile_worker.start()
         self.progress_bar.setVisible(False)
-    def on_decompile_complete(self, results):
-        # Update AI analysis panel with results
-        self.ai_analysis_panel.update_analysis_results(results)
-        # Automatically update the Source Code tab with high-level decompiled code
-        code = None
-        # Try consensus first
-        if 'consensus' in results and results['consensus']:
-            code = results['consensus']
-        # Fallback to LLM or any engine result
-        elif isinstance(results, dict):
-            for v in results.values():
-                if isinstance(v, dict) and v.get('success') and v.get('code'):
-                    code = v['code']
-                    break
-                elif isinstance(v, str) and v.strip():
-                    code = v
-                    break
-        # If code is empty or looks like a failed AI result, fall back to RetDec/Ghidra
-        if not code or 'decompilation failed' in code.lower() or 'error' in code.lower() or code.strip() == '':
-            self.log_view.append("[WARN] AI decompilation failed or incomplete. Falling back to RetDec/Ghidra.")
-            # Try RetDec first
-            retdec_result = self.decompiler_manager._run_retdec(self.current_file_path)
-            if retdec_result and 'error' not in retdec_result.lower() and 'failed' not in retdec_result.lower():
-                self.source_code_view.setPlainText(retdec_result)
-                self.log_view.append("[INFO] Source Code tab updated with RetDec C decompilation.")
-            else:
-                ghidra_result = self.decompiler_manager._run_ghidra(self.current_file_path)
-                if ghidra_result and 'error' not in ghidra_result.lower() and 'failed' not in ghidra_result.lower():
-                    self.source_code_view.setPlainText(ghidra_result)
-                    self.log_view.append("[INFO] Source Code tab updated with Ghidra C decompilation.")
-                else:
-                    self.source_code_view.setPlainText("[ERROR] All decompilation engines failed. Please check logs.")
-                    self.log_view.append("[ERROR] All decompilation engines failed.")
-        else:
-            self.source_code_view.setPlainText(code)
-            self.log_view.append("[INFO] Source Code tab updated with AI decompilation.")
-        self.log_view.append("[INFO] Decompilation complete")
-
-    def on_threat_complete(self, results):
-        threat_info = results['results']
-        
-        # Display threat intelligence results
-        threat_text = f"Hash: {results['hash']}\n"
-        threat_text += f"Reputation Score: {threat_info.get('reputation_score', 0)}/100\n"
-        threat_text += f"Threats Detected: {len(threat_info.get('threats_detected', []))}\n\n"
-        
-        for source, data in threat_info.get('sources', {}).items():
-            threat_text += f"{source.upper()}:\n"
-            if 'error' in data:
-                threat_text += f"  Error: {data['error']}\n"
-            else:
-                threat_text += f"  Malicious: {data.get('malicious', False)}\n"
-                threat_text += f"  Confidence: {data.get('confidence', 0)}%\n"
-            threat_text += "\n"
-        
-        self.threat_results_view.setPlainText(threat_text)
-        self.log_view.append("[INFO] Threat intelligence analysis complete")
-
-    def extract_basic_blocks(self, instructions):
-        """Extract basic blocks from instructions for CFG visualization"""
-        basic_blocks = []
-        current_block = []
-        current_address = None
-        
-        for instr in instructions:
-            if current_address is None:
-                current_address = instr['address']
-            
-            current_block.append(instr)
-            
-            # End block on control flow instructions
-            mnemonic = instr['mnemonic'].lower()
-            if any(x in mnemonic for x in ['jmp', 'je', 'jne', 'call', 'ret']):
-                if current_block:
-                    basic_blocks.append({
-                        'address': current_address,
-                        'size': len(current_block),
-                        'instructions': current_block,
-                        'targets': []  # Would need more analysis for real targets
-                    })
-                current_block = []
-                current_address = None
-        
-        # Add remaining block
-        if current_block:
-            basic_blocks.append({
-                'address': current_address,
-                'size': len(current_block),
-                'instructions': current_block,
-                'targets': []
-            })
-        
-        return basic_blocks
-
-    def update_progress(self, message):
-        self.analysis_status.setText(message)
-        self.log_view.append(f"[PROGRESS] {message}")
-
-    def save_openai_api_key(self):
-        # Save the OpenAI API key from the settings panel
-        api_key = self.api_key_edit.text().strip()
-        if api_key:
-            self.log_view.append("[INFO] OpenAI API key saved for this session.")
-        else:
-            self.log_view.append("[WARN] No API key entered.")
-
-    def summarize_function_with_ai(self):
-        # Summarize the displayed function/code with AI
-        try:
-            from src.ai.assistant import AIAssistant
-            import subprocess
-            model_name = self.model_combo.currentText()
-            code = self.ai_analysis_panel.llm_view.toPlainText()
-            if not code:
-                self.log_view.append("[ERROR] No code to summarize.")
-                return
-            if model_name == "OpenAI GPT-4":
-                api_key = self.api_key_edit.text().strip() if hasattr(self, 'api_key_edit') else ''
-                if not api_key:
-                    self.log_view.append("[WARN] No OpenAI API key entered. Please provide your API key in the Settings tab.")
-                    return
-                assistant = AIAssistant(api_key=api_key, model="gpt-4")
-                prompt = f"Summarize the following decompiled function or code for a reverse engineer. Highlight its purpose, logic, and any security-relevant operations.\n\n{code}"
-                try:
-                    response = assistant.client.chat.completions.create(
-                        model="gpt-4",
-                        messages=[
-                            {"role": "system", "content": "You are an expert reverse engineer and code summarizer."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        max_tokens=800,
-                        temperature=0.3
-                    )
-                    summary = response.choices[0].message.content
-                    self.ai_analysis_panel.consensus_view.setPlainText(summary)
-                    self.log_view.append("[INFO] AI function/code summary complete.")
-                except Exception as e:
-                    self.log_view.append(f"[ERROR] AI summarization failed: {e}")
-            elif model_name == "Ollama (Local)":
-                max_chars = 2000
-                safe_code = code[:max_chars]
-                prompt = f"Summarize this decompiled code for a reverse engineer. Highlight its purpose, logic, and any security-relevant operations.\n\n{safe_code}"
-                try:
-                    result = subprocess.run([
-                        "ollama", "run", "llama3", prompt
-                    ], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60)
-                    if result.returncode == 0:
-                        self.ai_analysis_panel.consensus_view.setPlainText(result.stdout.strip())
-                        self.log_view.append("[INFO] Ollama: AI function/code summary complete.")
-                    else:
-                        self.log_view.append(f"[ERROR] Ollama summarization failed: {result.stderr.strip()}")
-                except UnicodeDecodeError as ude:
-                    self.log_view.append(f"[ERROR] UnicodeDecodeError: {ude}. This is likely due to non-UTF8 output from a subprocess. Try setting PYTHONIOENCODING=utf-8 in your environment.")
-                except subprocess.TimeoutExpired:
-                    self.log_view.append("[ERROR] Ollama timed out while summarizing code. Try a smaller function or code block.")
-                except Exception as e:
-                    self.log_view.append(f"[ERROR] Ollama not available or failed: {e}")
-            else:
-                self.log_view.append("[INFO] Summarization is only available with OpenAI GPT-4 or Ollama (Local) model.")
-        except Exception as e:
-            self.log_view.append(f"[ERROR] Failed to summarize with AI: {e}")
-
-    def export_ai_results(self):
-        """
-        Export the contents of all AI Analysis Panel tabs to a text file.
-        """
-        try:
-            file_path, _ = QFileDialog.getSaveFileName(self, "Export AI Results", "", "Text Files (*.txt)")
-            if file_path:
-                llm_code = self.ai_analysis_panel.llm_view.toPlainText()
-                traditional_code = self.ai_analysis_panel.traditional_view.toPlainText()
-                consensus = self.ai_analysis_panel.consensus_view.toPlainText()
-                comparison = self.ai_analysis_panel.comparison_view.toPlainText()
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write("# LLM4Decompile Result\n\n" + llm_code + "\n\n")
-                    f.write("# Traditional Decompilation\n\n" + traditional_code + "\n\n")
-                    f.write("# Consensus\n\n" + consensus + "\n\n")
-                    f.write("# Comparison\n\n" + comparison + "\n")
-                self.log_view.append(f"[INFO] AI results exported to {file_path}")
-        except Exception as e:
-            self.log_view.append(f"[ERROR] Failed to export AI results: {e}")
-
-    def open_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, 
-            "Open Binary File", 
-            "", 
-            "All Files (*);; Executables (*.exe *.dll);; Python Bytecode (*.pyc)"
-        )
-        if file_path:
-            self.load_binary(file_path)
-
-    def load_binary(self, file_path):
-        self.current_file_path = file_path
-        if hasattr(self, 'file_label'):
-            self.file_label.setText(f"File: {file_path}")
-        if hasattr(self, 'progress_bar'):
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 0)  # Indeterminate progress
-        # Clear previous results
-        if hasattr(self, 'binary_info_tree'):
-            self.binary_info_tree.clear()
-        if hasattr(self, 'disassembly_view'):
-            self.disassembly_view.clear()
-        if hasattr(self, 'threat_results_view'):
-            self.threat_results_view.clear()
-        if hasattr(self, 'ioc_list'):
-            self.ioc_list.clear()
-        if hasattr(self, 'log_view'):
-            self.log_view.append(f"[INFO] Loading binary: {file_path}")
-        # Start binary analysis
-        self.analysis_worker = BinaryAnalysisWorker(
-            self.binary_loader, 
-            self.disassembler, 
-            file_path
-        )
-        self.analysis_worker.analysis_complete.connect(self.on_analysis_complete)
-        self.analysis_worker.progress_update.connect(self.update_progress)
-        self.analysis_worker.start()
-        # Start threat intelligence analysis if enabled
-        if hasattr(self, 'threat_intel_cb') and self.threat_intel_cb.isChecked():
-            self.threat_worker = ThreatAnalysisWorker(file_path, self.threat_intel)
-            self.threat_worker.threat_complete.connect(self.on_threat_complete)
-            self.threat_worker.progress_update.connect(self.update_progress)
-            self.threat_worker.start()
-
-
-    def show_open_output_button(self, output_path):
-        # Show a button in the current view to open the output file externally
-        btn = QPushButton(f"Open output file: {os.path.basename(output_path)}")
-        btn.clicked.connect(lambda: os.startfile(output_path))
-        # Try to add to the currently focused tab
-        current_widget = self.analysis_tabs.currentWidget()
-        if isinstance(current_widget, QWidget):
-            layout = current_widget.layout()
-            if layout:
-                layout.addWidget(btn)
-        self.log_view.append(f"[INFO] Provided button to open {output_path}")
-
-    def export_analysis(self):
-        if not self.current_file_path:
-            return
-        
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "Export Analysis Results", "", "JSON Files (*.json)"
-        )
-        if file_path:
-            # Export functionality would be implemented here
-            self.log_view.append(f"[INFO] Analysis exported to {file_path}")
-
-    def reanalyze_with_ai(self):
-        """Re-run AI decompilation on the currently loaded binary/code."""
-        if not self.current_file_path:
-            self.log_view.append("[ERROR] No file loaded for AI re-analysis.")
-            return
-        # Try to get instructions from the disassembly view or last analysis
-        instructions = []
-        # If you have a way to cache or store the last instructions, use that.
-        # Here, we'll try to parse from the disassembly view as a fallback.
-        disasm_text = self.disassembly_view.toPlainText()
-        if not disasm_text.strip():
-            self.log_view.append("[ERROR] No disassembly available for AI re-analysis.")
-            return
-        # Parse instructions (naive split, assumes one per line: 'mnemonic operands')
-        lines = disasm_text.strip().splitlines()
-        parsed_instructions = []
-        for line in lines:
-            parts = line.strip().split(None, 1)
-            if len(parts) == 2:
-                parsed_instructions.append({'mnemonic': parts[0], 'op_str': parts[1]})
-            elif len(parts) == 1:
-                parsed_instructions.append({'mnemonic': parts[0], 'op_str': ''})
-        if not parsed_instructions:
-            self.log_view.append("[ERROR] Could not parse instructions for AI re-analysis.")
-            return
-        assembly_code = "\n".join([
-            f"{instr['mnemonic']} {instr['op_str']}".strip()
-            for instr in parsed_instructions
-        ])
-        self.decompile_worker = DecompileWorker(
-            self.decompiler_manager,
-            assembly_code,
-            self.current_file_path
-        )
-        self.decompile_worker.decompile_complete.connect(self.on_decompile_complete)
-        self.decompile_worker.progress_update.connect(self.update_progress)
-        self.decompile_worker.start()
-        self.log_view.append("[INFO] Started AI re-decompilation of current binary/code.")
-
-    def enhance_with_ai_comments(self):
-        """Enhance the decompiled code with AI-generated comments (stub)."""
-        self.log_view.append("[INFO] Enhance with AI comments triggered (not implemented yet).")
-
-    def ask_ai_about_code(self):
-        """Answer user questions about the code using AI (stub)."""
-        self.log_view.append("[INFO] Ask AI about code triggered (not implemented yet).")
-
-    def configure_misp(self):
-        """Open the MISP configuration dialog (stub)."""
-        self.log_view.append("[INFO] Configure MISP triggered (not implemented yet).")
-
-    def export_iocs(self):
-        # IOC export functionality would be implemented here
-        self.log_view.append("[INFO] IOC export (to be implemented)")

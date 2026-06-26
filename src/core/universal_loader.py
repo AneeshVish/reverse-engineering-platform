@@ -3,6 +3,8 @@ import lief
 import mimetypes
 from pathlib import Path
 from enum import Enum
+import gc
+from src.core.novel_binary_parser import NovelBinaryParser
 
 class FileType(Enum):
     PE = 1
@@ -52,13 +54,12 @@ class UniversalLoader:
         if not path.exists():
             self.logger.error("File not found")
             return False
-        
         try:
             with open(path, 'rb') as f:
                 try:
                     self.raw_data = f.read()
                 except (UnicodeDecodeError, IOError) as e:
-                    logging.error(f"[UniversalLoader] File read error: {e}")
+                    self.logger.error(f"[UniversalLoader] File read error: {e}")
                     self.raw_data = None
         except Exception as e:
             self.logger.error(f"Failed to read file: {e}")
@@ -66,6 +67,48 @@ class UniversalLoader:
             self.raw_data = None
             self.parsed = None
             return True
+
+        # --- Novel detection/classification step ---
+        parser = NovelBinaryParser()
+        info = parser.detect_format(self.raw_data)
+        self.logger.info(f"[NovelBinaryParser] Type: {info['type']}, Confidence: {info['confidence']}, Rationale: {info['rationale']}, Entropy: {info['entropy']}")
+        self.file_type = getattr(FileType, info['type'], FileType.RAW) if info['type'] in FileType.__members__ else FileType.RAW
+        self.novel_detection_info = info
+        # Optionally, parse sections and expose them
+        self.novel_sections = parser.parse_sections(self.raw_data, info['type'])
+
+        # Only use LIEF for deep parsing if detection is confident
+        if info['confidence'] > 0.7 and info['type'] in ['PE', 'ELF', 'MACHO']:
+            try:
+                self.parsed = lief.parse(str(path))
+            except Exception as e:
+                self.logger.error(f"LIEF parse failed: {e}")
+                self.parsed = None
+        else:
+            self.parsed = None  # Not a known format or not confident
+
+        # Handle other formats as before
+        if self.file_type == FileType.PYTHON and path.suffix == '.pyc':
+            try:
+                from src.core.python_decompiler import PythonDecompiler
+                self.parsed = PythonDecompiler().decompile(path)
+            except Exception as e:
+                self.logger.error(f"Python decompilation failed: {e}")
+                self.parsed = None
+        elif self.file_type == FileType.JAVA and path.suffix in ['.class', '.jar']:
+            self.parsed = None  # Optionally add Java decompilation
+        elif self.file_type == FileType.WASM and path.suffix == '.wasm':
+            self.parsed = None  # Optionally add WASM decompilation
+        elif self.file_type == FileType.RAW and path.suffix == '.bin':
+            self.parsed = None
+        return True
+
+
+    def cleanup(self):
+        """Explicitly release LIEF objects and force garbage collection."""
+        self.parsed = None
+        self.raw_data = None
+        gc.collect()
         
         # Try to detect MIME type using mimetypes and fallback to extension
         mime = ''

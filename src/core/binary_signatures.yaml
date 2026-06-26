@@ -1,0 +1,18 @@
+# Example YAML signature database for novel binary parser
+- name: PE
+  offset: 0
+  magic: !!binary |-
+    TVo=
+  structural:
+    - e_lfanew
+- name: ELF
+  offset: 0
+  magic: !!binary |-
+    f0VM
+- name: Mach-O
+  offset: 0
+  magic:
+    - !!binary |-
+      z/rt/g==
+    - !!binary |-
+      /u36zw==
