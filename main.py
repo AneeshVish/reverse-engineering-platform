@@ -31,9 +31,15 @@ def main():
     
     # Create and start Qt application
     app = QApplication(sys.argv)
-    app.setApplicationName("Reverse Engineering Platform")
+    app.setApplicationName("RevENG")
     app.setOrganizationName("RE-Team")
-    
+
+    # Modern theming: load bundled fonts, then apply the saved theme globally
+    # BEFORE building the window so the welcome screen is themed too.
+    from src.gui import theme as theme_mod
+    theme_mod.load_bundled_fonts(app)
+    theme_mod.apply_theme(app, settings.get_theme())
+
     # Create main window
     window = MainWindow(settings, plugin_manager)
     window.show()

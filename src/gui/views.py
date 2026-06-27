@@ -23,10 +23,13 @@ class DisassemblyView(QWidget):
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(['Address', 'Bytes', 'Mnemonic', 'Operands'])
         
-        # Set font for disassembly
-        font = QFont("Consolas", 9)
-        self.table.setFont(font)
-        
+        # Monospace font from the global theme (no hardcoded Consolas).
+        try:
+            from src.gui.theme import resolve_fonts
+            self.table.setFont(QFont(resolve_fonts()[1], 12))
+        except Exception:
+            pass
+
         layout.addWidget(self.table)
     
     def update_disassembly(self, instructions):

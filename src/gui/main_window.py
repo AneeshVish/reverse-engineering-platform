@@ -4,11 +4,16 @@ from PyQt6.QtWidgets import (
     QSplitter, QTabWidget, QTextEdit, QTreeWidget,
     QTreeWidgetItem, QStatusBar, QFileDialog, QPushButton,
     QProgressBar, QLabel, QComboBox, QCheckBox, QLineEdit, QInputDialog,
-    QApplication
+    QApplication, QDockWidget, QToolBar, QToolButton, QFrame, QSizePolicy,
 ) # All widgets imported at top
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QAction
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
+from PyQt6.QtGui import QFont, QAction, QActionGroup, QShortcut, QKeySequence
+
+from src.gui import theme as theme_mod
+from src.gui.icons import icon as qicon
+from src.gui.insights_panel import InsightsPanel
+from src.gui.command_palette import CommandPalette
 import logging
 import time
 import hashlib
@@ -648,22 +653,52 @@ class MainWindow(QMainWindow):
         if self._welcome_screen_shown:
             return
         self._welcome_screen_shown = True
-        from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QMessageBox
-        from PyQt6.QtCore import Qt
-        self.welcome_widget = QWidget()
-        layout = QVBoxLayout()
-        label = QLabel("<h2>Welcome to the Reverse Engineering Platform</h2>\n<p style='font-size:16px;'>Choose your mode:</p>")
-        label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(label)
-        btn_cracking = QPushButton("Cracking")
-        btn_security = QPushButton("Security")
-        btn_cracking.setMinimumHeight(40)
-        btn_security.setMinimumHeight(40)
-        btn_cracking.setStyleSheet("font-size:16px;")
-        btn_security.setStyleSheet("font-size:16px;")
-        layout.addWidget(btn_cracking)
-        layout.addWidget(btn_security)
-        self.welcome_widget.setLayout(layout)
+        outer = QWidget()
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.addStretch()
+        row = QHBoxLayout()
+        row.addStretch()
+
+        card = QFrame()
+        card.setObjectName("Card")
+        card.setMaximumWidth(560)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(44, 40, 44, 40)
+        cl.setSpacing(12)
+
+        brand = QLabel("⬢  RevENG")
+        brand.setObjectName("Brand")
+        brand.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        sub = QLabel("Reverse Engineering Platform")
+        sub.setObjectName("Heading")
+        sub.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        tag = QLabel("Disassembly · Decompilation · Security audit · Whole-app analysis")
+        tag.setObjectName("Dim")
+        tag.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        tag.setWordWrap(True)
+        cl.addWidget(brand)
+        cl.addWidget(sub)
+        cl.addWidget(tag)
+        cl.addSpacing(14)
+
+        choose = QLabel("Choose a workspace")
+        choose.setObjectName("Dim")
+        cl.addWidget(choose)
+        btn_cracking = QPushButton("   Cracking  —  general RE workbench")
+        btn_cracking.setObjectName("Primary")
+        btn_cracking.setMinimumHeight(46)
+        btn_cracking.setIcon(qicon("fa5s.microchip"))
+        btn_security = QPushButton("   Security  —  audit & secrets focus")
+        btn_security.setMinimumHeight(46)
+        btn_security.setIcon(qicon("fa5s.shield-alt"))
+        cl.addWidget(btn_cracking)
+        cl.addWidget(btn_security)
+
+        row.addWidget(card)
+        row.addStretch()
+        outer_layout.addLayout(row)
+        outer_layout.addStretch()
+        self.welcome_widget = outer
         self.setCentralWidget(self.welcome_widget)
         btn_cracking.clicked.connect(self.launch_main_ui)
         btn_security.clicked.connect(self.launch_security_mode)
@@ -676,71 +711,8 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.setup_menu()
         self.setup_status_bar()
-        # Restore the original main window stylesheet
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #232629;
-                color: #f5f6fa;
-                font-family: 'Segoe UI', 'Arial', sans-serif;
-                font-size: 14px;
-            }
-            QTabWidget::pane {
-                border: 1px solid #444;
-                border-radius: 8px;
-                background: #282c34;
-                padding: 6px;
-            }
-            QTabBar::tab {
-                background: #282c34;
-                color: #f5f6fa;
-                border-radius: 8px 8px 0 0;
-                padding: 10px 20px;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background: #353b45;
-                color: #61dafb;
-            }
-            QTabBar::tab:hover {
-                background: #3c4048;
-            }
-            QPushButton {
-                background-color: #353b45;
-                color: #f5f6fa;
-                border: 1px solid #444;
-                border-radius: 6px;
-                padding: 8px 18px;
-                margin: 4px;
-            }
-            QPushButton:hover {
-                background-color: #61dafb;
-                color: #232629;
-            }
-            QLineEdit, QTextEdit {
-                background: #232629;
-                color: #f5f6fa;
-                border: 1px solid #444;
-                border-radius: 6px;
-                padding: 6px;
-            }
-            QLabel {
-                color: #f5f6fa;
-            }
-            QScrollBar:vertical {
-                background: #232629;
-                width: 12px;
-                margin: 22px 0 22px 0;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background: #353b45;
-                min-height: 20px;
-                border-radius: 6px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                background: none;
-            }
-        """)
+        # The global theme/QSS is applied at the application level (see main.py
+        # and src/gui/theme.py); no per-window stylesheet here.
         # Report detected backends and disable features whose tools are missing,
         # so nothing in the UI silently fails later.
         self.report_capabilities()
@@ -802,42 +774,237 @@ class MainWindow(QMainWindow):
             self.log_view.append("[INFO] Security mode: focused on Security Audit.")
 
     def init_ui(self):
-        self.setWindowTitle("Ultimate Reverse Engineering Platform")
-        # Only set geometry if it fits the screen
-        screen = self.screen() or self.window().screen() if hasattr(self, 'window') else None
+        self.setWindowTitle("RevENG — Reverse Engineering Platform")
+        screen = self.screen()
         if screen:
-            screen_size = screen.availableGeometry()
-            width = min(1200, screen_size.width())
-            height = min(800, screen_size.height())
-            x = screen_size.x() + 100
-            y = screen_size.y() + 100
-            self.setGeometry(x, y, width, height)
+            g = screen.availableGeometry()
+            self.resize(min(1440, g.width()), min(900, g.height()))
         else:
-            self.setGeometry(100, 100, 1200, 800)
+            self.resize(1440, 900)
+        self.setDockNestingEnabled(True)
+        self.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks | QMainWindow.DockOption.AllowNestedDocks)
 
+        # Log view first — panels reference self.log_view if they fail to load.
+        self._build_log_view()
 
-        # Central widget with splitter
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
-        
-        # Main horizontal splitter
-        main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        
-        # Left panel (Binary Info + Controls)
-        left_panel = self.create_left_panel()
-        main_splitter.addWidget(left_panel)
-        
-        # Center panel (Analysis Views)
-        center_panel = self.create_center_panel()
-        main_splitter.addWidget(center_panel)
-        
-        # Right panel (Advanced Features)
-        right_panel = self.create_right_panel()
-        main_splitter.addWidget(right_panel)
-        
-        main_splitter.setSizes([300, 800, 500])
-        main_layout.addWidget(main_splitter)
+        # Center: the analysis tab area.
+        center = self.create_center_panel()
+        self.setCentralWidget(center)
+
+        # Docks: Explorer (left), Insights (right), Log (bottom).
+        self.explorer_dock = self._add_dock(
+            "Explorer", self.create_left_panel(), Qt.DockWidgetArea.LeftDockWidgetArea)
+        self.insights_dock = self._add_dock(
+            "Insights", self.create_right_panel(), Qt.DockWidgetArea.RightDockWidgetArea)
+        self.log_dock = self._add_dock(
+            "Log", self._log_dock_widget, Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.resizeDocks([self.explorer_dock], [300], Qt.Orientation.Horizontal)
+        self.resizeDocks([self.insights_dock], [320], Qt.Orientation.Horizontal)
+        self.resizeDocks([self.log_dock], [170], Qt.Orientation.Vertical)
+
+        # Far-left activity rail, top toolbar, and the ⌘K command palette.
+        self._build_activity_rail()
+        self._build_main_toolbar()
+        self._install_command_palette()
+
+    # ---- layout helpers -----------------------------------------------------
+
+    def _add_dock(self, title, widget, area):
+        dock = QDockWidget(title, self)
+        dock.setWidget(widget)
+        dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        self.addDockWidget(area, dock)
+        return dock
+
+    def _build_log_view(self):
+        self.log_view = QTextEdit()
+        self.log_view.setReadOnly(True)
+        self._log_dock_widget = QWidget()
+        lay = QVBoxLayout(self._log_dock_widget)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.addWidget(self.log_view)
+        self.download_log_btn = QPushButton("Download Log")
+        self.download_log_btn.setIcon(qicon("fa5s.download"))
+        self.download_log_btn.clicked.connect(self.download_log_file)
+        lay.addWidget(self.download_log_btn)
+
+    def _build_activity_rail(self):
+        rail = QToolBar("Activity")
+        rail.setObjectName("ActivityRail")
+        rail.setMovable(False)
+        rail.setIconSize(QSize(22, 22))
+        rail.setOrientation(Qt.Orientation.Vertical)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, rail)
+        group = QActionGroup(self)
+        group.setExclusive(True)
+
+        def rail_action(ic, tip, handler, checkable=True):
+            act = QAction(qicon(ic), "", self)
+            act.setToolTip(tip)
+            act.setCheckable(checkable)
+            act.triggered.connect(handler)
+            rail.addAction(act)
+            if checkable:
+                group.addAction(act)
+            return act
+
+        rail_action("fa5s.folder-open", "Open binary / app", self.open_file, checkable=False)
+        rail.addSeparator()
+        rail_action("fa5s.microchip", "Disassembly", lambda: self._select_tab("Disassembly"))
+        rail_action("fa5s.code", "Source Code", lambda: self._select_tab("Source Code"))
+        rail_action("fa5s.project-diagram", "Control Flow Graph", lambda: self._select_tab("CFG Viewer"))
+        rail_action("fa5s.robot", "AI Decompilation", lambda: self._select_tab("AI Decompilation"))
+        rail_action("fa5s.shield-alt", "Security Audit", lambda: self._select_tab("Security Audit"))
+        rail_action("fa5s.key", "Key Analysis", lambda: self._select_tab("Key Analysis"))
+        rail_action("fa5s.network-wired", "Network Capture", lambda: self._select_tab("Network Capture"))
+        rail_action("fa5s.box-open", "Whole-app (Full Software)", lambda: self._select_tab("Full Software"))
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        rail.addWidget(spacer)
+        rail_action("fa5s.terminal", "Toggle Log", lambda: self.log_dock.setVisible(not self.log_dock.isVisible()), checkable=False)
+        rail_action("fa5s.cog", "Settings", lambda: (self.insights_dock.show(), self._select_right("Settings")), checkable=False)
+
+    def _build_main_toolbar(self):
+        tb = QToolBar("Main")
+        tb.setObjectName("MainToolBar")
+        tb.setMovable(False)
+        tb.setIconSize(QSize(16, 16))
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
+
+        open_act = QAction(qicon("fa5s.folder-open"), "Open", self)
+        open_act.triggered.connect(self.open_file)
+        tb.addAction(open_act)
+        re_act = QAction(qicon("fa5s.sync"), "Re-analyze", self)
+        re_act.triggered.connect(self.reanalyze_current)
+        tb.addAction(re_act)
+        tb.addSeparator()
+
+        cmd = QPushButton("  ⌘K  Commands")
+        cmd.clicked.connect(self.open_command_palette)
+        tb.addWidget(cmd)
+
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        tb.addWidget(spacer)
+
+        tb.addWidget(QLabel("Theme "))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(list(theme_mod.THEMES.keys()))
+        current = self.settings.get_theme() if hasattr(self.settings, "get_theme") else theme_mod.DEFAULT_THEME
+        if current in theme_mod.THEMES:
+            self.theme_combo.setCurrentText(current)
+        self.theme_combo.currentTextChanged.connect(self._apply_theme_choice)
+        tb.addWidget(self.theme_combo)
+
+    def _install_command_palette(self):
+        sc = QShortcut(QKeySequence("Ctrl+K"), self)
+        sc.activated.connect(self.open_command_palette)
+        sc_mac = QShortcut(QKeySequence("Meta+K"), self)
+        sc_mac.activated.connect(self.open_command_palette)
+
+    def _select_tab(self, name):
+        tabs = getattr(self, "analysis_tabs", None)
+        if tabs is None:
+            return
+        for i in range(tabs.count()):
+            if tabs.tabText(i) == name:
+                tabs.setCurrentIndex(i)
+                return
+
+    def _select_right(self, name):
+        tabs = getattr(self, "right_tabs", None)
+        if tabs is None:
+            return
+        for i in range(tabs.count()):
+            if tabs.tabText(i) == name:
+                tabs.setCurrentIndex(i)
+                return
+
+    def reanalyze_current(self):
+        if self.current_file_path:
+            self.start_binary_analysis(self.current_file_path)
+        elif hasattr(self, "log_view"):
+            self.log_view.append("[INFO] Open a file first to re-analyze.")
+
+    @staticmethod
+    def _fmt_size(n):
+        if n < 1024:
+            return f"{n} B"
+        if n < 1024 * 1024:
+            return f"{n / 1024:.0f} KB"
+        return f"{n / 1024 / 1024:.1f} MB"
+
+    def _update_insights(self, results):
+        """Populate the right-dock Insights panel + status bar from results."""
+        info = results.get('binary_info', {}) or {}
+        fmt = str(info.get('type', '—')).replace('FileType.', '')
+        arch = str(info.get('arch', '—')).replace('Architecture.', '')
+        size = '—'
+        secrets = '—'
+        try:
+            if self.current_file_path and os.path.isfile(self.current_file_path):
+                size = self._fmt_size(os.path.getsize(self.current_file_path))
+                from src.core.bundle_analysis import _SECRET_RE
+                with open(self.current_file_path, 'rb') as f:
+                    secrets = len(_SECRET_RE.findall(f.read(4 * 1024 * 1024)))
+        except Exception:
+            pass
+        funcs = len(results.get('functions', []))
+        secs = len(results.get('sections', []))
+        instr = blocks = 0
+        model = getattr(self, 'program_model', None)
+        if model is not None and model.instructions:
+            st = model.stats()
+            instr, blocks = st['instructions'], st['basic_blocks']
+        endpoints = getattr(self, '_last_endpoint_count', 0)
+        protection = getattr(self, '_last_protection_level', 'none')
+
+        if hasattr(self, 'insights_panel'):
+            self.insights_panel.update_from(
+                format=fmt, arch=arch, size=size, functions=funcs, sections=secs,
+                instructions=instr, blocks=blocks, secrets=secrets,
+                endpoints=endpoints, protection=protection)
+        if hasattr(self, 'status_format'):
+            self.status_format.setText(fmt)
+            self.status_arch.setText(arch)
+            self.status_size.setText(size)
+        if hasattr(self, 'file_label') and self.current_file_path:
+            self.file_label.setText(os.path.basename(self.current_file_path))
+
+    def _apply_theme_choice(self, name):
+        app = QApplication.instance()
+        if app is not None:
+            theme_mod.apply_theme(app, name)
+        if hasattr(self.settings, "set_theme"):
+            self.settings.set_theme(name)
+        if hasattr(self, "log_view"):
+            self.log_view.append(f"[INFO] Theme set to {name}.")
+
+    def open_command_palette(self):
+        actions = [
+            ("Open binary / app…", self.open_file),
+            ("Re-analyze current file", self.reanalyze_current),
+            ("Full binary decompilation", self.run_full_decompilation),
+            ("Re-analyze with AI", self.reanalyze_with_ai),
+            ("Show: Disassembly", lambda: self._select_tab("Disassembly")),
+            ("Show: Source Code", lambda: self._select_tab("Source Code")),
+            ("Show: Control Flow Graph", lambda: self._select_tab("CFG Viewer")),
+            ("Show: AI Decompilation", lambda: self._select_tab("AI Decompilation")),
+            ("Show: Security Audit", lambda: self._select_tab("Security Audit")),
+            ("Show: Network Capture", lambda: self._select_tab("Network Capture")),
+            ("Show: Whole-app analysis", lambda: self._select_tab("Full Software")),
+            ("Export IOCs", self.export_iocs),
+            ("Export analysis", self.export_analysis),
+            ("Toggle Log panel", lambda: self.log_dock.setVisible(not self.log_dock.isVisible())),
+        ]
+        for tname in theme_mod.THEMES:
+            actions.append((f"Theme: {tname}", lambda n=tname: (self.theme_combo.setCurrentText(n))))
+        palette = CommandPalette(actions, self)
+        palette.move(self.geometry().center().x() - 260, self.geometry().top() + 120)
+        palette.exec()
 
     def download_log_file(self):
         """Download the contents of the log view to a file chosen by the user."""
@@ -881,36 +1048,39 @@ class MainWindow(QMainWindow):
     def create_center_panel(self):
         center_widget = QWidget()
         layout = QVBoxLayout(center_widget)
-        
-        # Analysis tabs
-        self.analysis_tabs = QTabWidget()
+        layout.setContentsMargins(8, 8, 8, 8)
 
-        # Disassembly view
-        disassembly_tab_widget = QWidget()
-        disassembly_layout = QVBoxLayout(disassembly_tab_widget)
+        self.analysis_tabs = QTabWidget()
+        self.analysis_tabs.setDocumentMode(True)
+        self.analysis_tabs.setMovable(True)
+
+        def add_tab(widget, label, ic=None):
+            idx = self.analysis_tabs.addTab(widget, label)
+            if ic:
+                self.analysis_tabs.setTabIcon(idx, qicon(ic))
+            return idx
+
+        # Disassembly view (fonts come from the global theme QSS — no per-widget
+        # Consolas/Segoe overrides that break on macOS).
+        self._disassembly_tab = QWidget()
+        disassembly_layout = QVBoxLayout(self._disassembly_tab)
         self.disassembly_view = QTextEdit()
         self.disassembly_view.setReadOnly(True)
-        self.disassembly_view.setFont(QFont("Consolas", 9))
         disassembly_layout.addWidget(self.disassembly_view)
-        # Add Download Disassembly button
         self.download_disassembly_btn = QPushButton("Download Disassembly")
-        disassembly_layout.addWidget(self.download_disassembly_btn)
+        self.download_disassembly_btn.setIcon(qicon("fa5s.download"))
         self.download_disassembly_btn.clicked.connect(self.download_disassembly)
-        self.analysis_tabs.addTab(disassembly_tab_widget, "Disassembly")
+        disassembly_layout.addWidget(self.download_disassembly_btn)
+        add_tab(self._disassembly_tab, "Disassembly", "fa5s.microchip")
 
-        # Endpoint Detection tab (new)
         self.endpoint_detection_view = QTextEdit()
         self.endpoint_detection_view.setReadOnly(True)
-        self.endpoint_detection_view.setFont(QFont("Consolas", 9))
-        self.analysis_tabs.addTab(self.endpoint_detection_view, "Endpoint Detection")
+        add_tab(self.endpoint_detection_view, "Endpoint Detection", "fa5s.network-wired")
 
-        # Source Code tab (for AI/traditional decompilation results)
         self.source_code_view = QTextEdit()
         self.source_code_view.setReadOnly(True)
-        self.source_code_view.setFont(QFont("Consolas", 9))
-        self.analysis_tabs.addTab(self.source_code_view, "Source Code")
+        add_tab(self.source_code_view, "Source Code", "fa5s.code")
 
-        # --- Pseudocode tab with toggle ---
         from src.gui.pseudocode_toggle_widget import PseudocodeToggleWidget
         self.pseudocode_tab_widget = QWidget()
         pseudo_layout = QVBoxLayout(self.pseudocode_tab_widget)
@@ -918,88 +1088,69 @@ class MainWindow(QMainWindow):
         pseudo_layout.addWidget(self.pseudocode_toggle)
         self.pseudocode_view = QTextEdit()
         self.pseudocode_view.setReadOnly(True)
-        self.pseudocode_view.setFont(QFont("Consolas", 9))
         pseudo_layout.addWidget(self.pseudocode_view)
-        self.analysis_tabs.addTab(self.pseudocode_tab_widget, "Pseudocode")
+        add_tab(self.pseudocode_tab_widget, "Pseudocode", "fa5s.file-code")
         self.pseudocode_toggle.toggle_changed.connect(self.update_pseudocode_tab)
-        # --- End Pseudocode tab with toggle ---
 
-        # AI Analysis Panel
         self.ai_analysis_panel = AIAnalysisPanel()
-        self.analysis_tabs.addTab(self.ai_analysis_panel, "AI Decompilation")
-        # Connect AIAnalysisPanel buttons to MainWindow handlers
+        add_tab(self.ai_analysis_panel, "AI Decompilation", "fa5s.robot")
         self.ai_analysis_panel.reanalyze_btn.clicked.connect(self.reanalyze_with_ai)
         self.ai_analysis_panel.enhance_btn.clicked.connect(self.enhance_with_ai_comments)
         self.ai_analysis_panel.export_btn.clicked.connect(self.export_ai_results)
         self.ai_analysis_panel.summarize_btn.clicked.connect(self.summarize_function_with_ai)
         self.ai_analysis_panel.qa_btn.clicked.connect(self.ask_ai_about_code)
-        
-        # Advanced Visualization
+
         self.viz_widget = AdvancedVisualizationWidget()
-        self.analysis_tabs.addTab(self.viz_widget, "Visualization")
+        add_tab(self.viz_widget, "Visualization", "fa5s.chart-area")
 
-        # CFG Viewer integration
         self.cfg_btn = QPushButton("Show Control Flow Graph (CFG)")
+        self.cfg_btn.setObjectName("Primary")
         self.cfg_btn.clicked.connect(self.show_cfg_viewer)
-        self.analysis_tabs.addTab(self.cfg_btn, "CFG Viewer")
+        cfg_holder = QWidget()
+        cfg_layout = QVBoxLayout(cfg_holder)
+        cfg_layout.addStretch()
+        cfg_layout.addWidget(self.cfg_btn)
+        cfg_layout.addStretch()
+        add_tab(cfg_holder, "CFG Viewer", "fa5s.project-diagram")
 
-        # Full Software Analysis tab
         try:
             from src.gui.full_software_panel import FullSoftwarePanel
             self.full_software_panel = FullSoftwarePanel()
-            self.analysis_tabs.addTab(self.full_software_panel, "Full Software")
+            add_tab(self.full_software_panel, "Full Software", "fa5s.box-open")
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to load Full Software panel: {e}")
 
-        # Crypto Tools integration
         try:
             from src.gui.crypto_tools_panel import CryptoToolsPanel
             self.crypto_tools_panel = CryptoToolsPanel()
-            self.analysis_tabs.addTab(self.crypto_tools_panel, "Crypto Tools")
+            add_tab(self.crypto_tools_panel, "Crypto Tools", "fa5s.lock")
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to load Crypto Tools panel: {e}")
 
-        # Key Analysis integration
         try:
             from src.gui.key_analysis_panel import KeyAnalysisPanel
             self.key_analysis_panel = KeyAnalysisPanel()
-            self.analysis_tabs.addTab(self.key_analysis_panel, "Key Analysis")
+            add_tab(self.key_analysis_panel, "Key Analysis", "fa5s.key")
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to load Key Analysis panel: {e}")
 
-        # Security Audit integration
         try:
             from src.gui.security_audit_panel import SecurityAuditPanel
             self.security_audit_panel = SecurityAuditPanel()
-            self.analysis_tabs.addTab(self.security_audit_panel, "Security Audit")
+            add_tab(self.security_audit_panel, "Security Audit", "fa5s.shield-alt")
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to load Security Audit panel: {e}")
-        
-        # Network Capture integration
+
         try:
             from src.gui.network_capture_panel import NetworkCapturePanel
             self.network_capture_panel = NetworkCapturePanel()
-            self.analysis_tabs.addTab(self.network_capture_panel, "Network Capture")
+            add_tab(self.network_capture_panel, "Network Capture", "fa5s.wifi")
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to load Network Capture panel: {e}")
-        
-        # Log view
-        self.log_view = QTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setFont(QFont("Consolas", 8))
-        # Add download button below log view
-        log_tab_widget = QWidget()
-        log_tab_layout = QVBoxLayout(log_tab_widget)
-        log_tab_layout.addWidget(self.log_view)
-        self.download_log_btn = QPushButton("Download Log File")
-        log_tab_layout.addWidget(self.download_log_btn)
-        self.download_log_btn.clicked.connect(self.download_log_file)
-        self.analysis_tabs.addTab(log_tab_widget, "Analysis Log")
-        
-        # Project Analysis tab (new)
+
         self.project_analysis_tab = ProjectAnalysisTab()
-        self.analysis_tabs.addTab(self.project_analysis_tab, "Project Analysis")
-        
+        add_tab(self.project_analysis_tab, "Project Analysis", "fa5s.folder-tree")
+
         layout.addWidget(self.analysis_tabs)
         return center_widget
 
@@ -1017,119 +1168,123 @@ class MainWindow(QMainWindow):
     def setup_status_bar(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        # Add permanent widgets to status bar
+        self.status_format = QLabel("—")
+        self.status_arch = QLabel("—")
+        self.status_size = QLabel("—")
         self.analysis_status = QLabel("Ready")
-        self.status_bar.addPermanentWidget(self.analysis_status)
+        for w in (self.status_format, self.status_arch, self.status_size, self.analysis_status):
+            self.status_bar.addPermanentWidget(w)
 
     def create_right_panel(self):
         right_widget = QWidget()
         layout = QVBoxLayout(right_widget)
-        
-        # Right panel tabs
-        right_tabs = QTabWidget()
-        
-        # Threat Intelligence view
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.right_tabs = QTabWidget()
+        self.right_tabs.setDocumentMode(True)
+
+        # Insights summary.
+        self.insights_panel = InsightsPanel()
+        self.insights_panel.reanalyze_requested.connect(self.reanalyze_current)
+        self.right_tabs.addTab(self.insights_panel, "Insights")
+
+        # Threat Intelligence.
         threat_widget = QWidget()
         threat_layout = QVBoxLayout(threat_widget)
-        
-        threat_layout.addWidget(QLabel("Threat Intelligence Results:"))
+        threat_layout.setContentsMargins(12, 12, 12, 12)
+        lbl = QLabel("Threat Intelligence")
+        lbl.setObjectName("Heading")
+        threat_layout.addWidget(lbl)
         self.threat_results_view = QTextEdit()
         self.threat_results_view.setReadOnly(True)
         threat_layout.addWidget(self.threat_results_view)
-        
-        threat_layout.addWidget(QLabel("Extracted IOCs:"))
+        iocs_lbl = QLabel("Extracted IOCs")
+        iocs_lbl.setObjectName("Dim")
+        threat_layout.addWidget(iocs_lbl)
         self.ioc_list = QTreeWidget()
         self.ioc_list.setHeaderLabels(["Type", "Value", "Context"])
         threat_layout.addWidget(self.ioc_list)
-        
-        right_tabs.addTab(threat_widget, "Threat Intel")
-        
-        # Collaboration view (placeholder)
-        collab_widget = QWidget()
-        collab_layout = QVBoxLayout(collab_widget)
-        collab_layout.addWidget(QLabel("Collaboration features coming soon..."))
-        right_tabs.addTab(collab_widget, "Collaboration")
-        
-        # Settings view
+        self.right_tabs.addTab(threat_widget, "Threat Intel")
+
+        # Settings.
         settings_widget = QWidget()
         settings_layout = QVBoxLayout(settings_widget)
-        
-        settings_layout.addWidget(QLabel("AI Model:"))
+        settings_layout.setContentsMargins(12, 12, 12, 12)
+        settings_layout.setSpacing(8)
+        head = QLabel("Settings")
+        head.setObjectName("Heading")
+        settings_layout.addWidget(head)
+        settings_layout.addWidget(QLabel("Theme"))
+        self.theme_combo_settings = QComboBox()
+        self.theme_combo_settings.addItems(list(theme_mod.THEMES.keys()))
+        _cur_theme = self.settings.get_theme() if hasattr(self.settings, "get_theme") else theme_mod.DEFAULT_THEME
+        if _cur_theme in theme_mod.THEMES:
+            self.theme_combo_settings.setCurrentText(_cur_theme)
+        self.theme_combo_settings.currentTextChanged.connect(self._apply_theme_choice)
+        settings_layout.addWidget(self.theme_combo_settings)
+        settings_layout.addWidget(QLabel("AI Model"))
         self.model_combo = QComboBox()
         self.model_combo.addItems(["Ollama (Local)"])
-        self.model_combo.setCurrentIndex(0)
         self.model_combo.currentIndexChanged.connect(self.on_model_changed)
         settings_layout.addWidget(self.model_combo)
-        settings_layout.addWidget(QLabel("OpenAI API Key:"))
+        settings_layout.addWidget(QLabel("OpenAI API Key"))
         self.api_key_edit = QLineEdit()
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_edit.setPlaceholderText("Enter your OpenAI API key here")
         settings_layout.addWidget(self.api_key_edit)
-        
-        settings_layout.addWidget(QLabel("Visualization Options:"))
         self.entropy_cb = QCheckBox("Show Entropy Analysis")
         self.entropy_cb.setChecked(True)
         settings_layout.addWidget(self.entropy_cb)
-        
         settings_layout.addStretch()
-        right_tabs.addTab(settings_widget, "Settings")
-        
-        layout.addWidget(right_tabs)
+        self.right_tabs.addTab(settings_widget, "Settings")
+
+        layout.addWidget(self.right_tabs)
         return right_widget
 
     def create_left_panel(self):
         left_widget = QWidget()
         layout = QVBoxLayout(left_widget)
-        
-        # File info and controls
-        file_info_group = QWidget()
-        file_layout = QVBoxLayout(file_info_group)
-        
-        # Open file button
-        self.open_btn = QPushButton("Open Binary File")
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        self.open_btn = QPushButton("  Open Binary / App")
+        self.open_btn.setObjectName("Primary")
+        self.open_btn.setIcon(qicon("fa5s.folder-open"))
         self.open_btn.clicked.connect(self.open_file)
-        file_layout.addWidget(self.open_btn)
-        
-        # File path label
+        layout.addWidget(self.open_btn)
+
         self.file_label = QLabel("No file loaded")
-        file_layout.addWidget(self.file_label)
-        
-        # Analysis options
-        options_group = QWidget()
-        options_layout = QVBoxLayout(options_group)
-        
-        self.ai_decompile_cb = QCheckBox("Enable AI Decompilation")
+        self.file_label.setObjectName("Dim")
+        self.file_label.setWordWrap(True)
+        layout.addWidget(self.file_label)
+
+        # Analysis options.
+        self.ai_decompile_cb = QCheckBox("AI decompilation")
         self.ai_decompile_cb.setChecked(True)
-        options_layout.addWidget(self.ai_decompile_cb)
-        
-        self.threat_intel_cb = QCheckBox("Enable Threat Intelligence")
+        self.threat_intel_cb = QCheckBox("Threat intelligence")
         self.threat_intel_cb.setChecked(True)
-        options_layout.addWidget(self.threat_intel_cb)
-        
-        self.collaboration_cb = QCheckBox("Enable Collaboration")
-        options_layout.addWidget(self.collaboration_cb)
-        
-        file_layout.addWidget(options_group)
-        layout.addWidget(file_info_group)
-        
-        # Binary sections tree
+        self.collaboration_cb = QCheckBox("Collaboration")
+        for cb in (self.ai_decompile_cb, self.threat_intel_cb, self.collaboration_cb):
+            layout.addWidget(cb)
+
+        sec_lbl = QLabel("SECTIONS")
+        sec_lbl.setObjectName("Dim")
+        layout.addWidget(sec_lbl)
         self.binary_info_tree = QTreeWidget()
         self.binary_info_tree.setHeaderLabels(["Section", "Address", "Size"])
-        layout.addWidget(QLabel("Binary Sections:"))
         layout.addWidget(self.binary_info_tree)
 
-        # Functions list (double-click to jump to the address in Disassembly).
+        fn_lbl = QLabel("FUNCTIONS  (double-click to navigate)")
+        fn_lbl.setObjectName("Dim")
+        layout.addWidget(fn_lbl)
         self.functions_tree = QTreeWidget()
         self.functions_tree.setHeaderLabels(["Function", "Address"])
         self.functions_tree.itemDoubleClicked.connect(self.on_function_selected)
-        layout.addWidget(QLabel("Functions (double-click to navigate):"))
         layout.addWidget(self.functions_tree)
 
-        # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
-        
         return left_widget
 
     def on_function_selected(self, item, _column=0):
@@ -1152,7 +1307,7 @@ class MainWindow(QMainWindow):
                 cursor.setPosition(idx)
                 doc.setTextCursor(cursor)
                 doc.ensureCursorVisible()
-                self.analysis_tabs.setCurrentWidget(self.disassembly_view)
+                self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
             else:
                 if hasattr(self, 'log_view'):
                     self.log_view.append(f"[INFO] Address {addr_text} not in the disassembled range.")
@@ -1506,6 +1661,7 @@ class MainWindow(QMainWindow):
             try:
                 from src.core import protection_detector
                 rep = protection_detector.detect_protections(self.current_file_path)
+                self._last_protection_level = rep.get('level', 'none')
                 if hasattr(self, 'log_view'):
                     self.log_view.append("[PROTECTION] " +
                                          protection_detector.render_protection_report(rep)
@@ -1552,8 +1708,10 @@ class MainWindow(QMainWindow):
                 with open(self.current_file_path, 'rb') as fh:
                     endpoints = detect_endpoints(fh.read(64 * 1024 * 1024))
             self.endpoint_detection_view.setPlainText(format_endpoint_results(endpoints))
+            self._last_endpoint_count = len(endpoints)
         except Exception as e:
             self.endpoint_detection_view.setPlainText(f"[ERROR] Endpoint detection failed: {e}")
+            self._last_endpoint_count = 0
 
         # Restore detailed log info as before
         if hasattr(self, 'log_view'):
@@ -1621,6 +1779,9 @@ class MainWindow(QMainWindow):
             self.program_model = None
             if hasattr(self, 'log_view'):
                 self.log_view.append(f"[WARN] Could not build program model: {e}")
+
+        # Populate the Insights panel + status bar from the gathered facts.
+        self._update_insights(results)
 
         # Feed the Visualization tab (entropy map + basic-block CFG) from real data.
         try:
