@@ -4,6 +4,8 @@ import subprocess
 import sys
 import os
 
+from src.utils.paths import script_path
+
 class KeyAnalysisPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -67,7 +69,7 @@ class KeyAnalysisPanel(QWidget):
         target, _ = QFileDialog.getOpenFileName(self, "Select File or Directory to Scan")
         if not target:
             return
-        cmd = [sys.executable, os.path.join("scripts", "find_key_strings.py"), target]
+        cmd = [sys.executable, script_path("find_key_strings"), target]
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         self.output.setPlainText(proc.stdout + proc.stderr)
 
@@ -75,7 +77,7 @@ class KeyAnalysisPanel(QWidget):
         dump_path, _ = QFileDialog.getOpenFileName(self, "Select Memory Dump File")
         if not dump_path:
             return
-        cmd = [sys.executable, os.path.join("scripts", "dump_memory_keys.py"), dump_path]
+        cmd = [sys.executable, script_path("dump_memory_keys"), dump_path]
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         self.output.setPlainText(proc.stdout + proc.stderr)
 
@@ -87,7 +89,7 @@ class KeyAnalysisPanel(QWidget):
         if not input_path or not wordlist_path:
             self.output.setPlainText("Encrypted file and wordlist are required.")
             return
-        cmd = [sys.executable, os.path.join("scripts", "dictionary_attack.py"), input_path, wordlist_path, '--algo', algo]
+        cmd = [sys.executable, script_path("dictionary_attack"), input_path, wordlist_path, '--algo', algo]
         if iv:
             cmd += ['--iv', iv]
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
@@ -103,7 +105,7 @@ class KeyAnalysisPanel(QWidget):
         if not input_path or not keylen:
             self.output.setPlainText("Encrypted file and key length are required.")
             return
-        cmd = [sys.executable, os.path.join("scripts", "brute_force_attack.py"), input_path, '--algo', algo, '--keylen', keylen, '--charset', charset]
+        cmd = [sys.executable, script_path("brute_force_attack"), input_path, '--algo', algo, '--keylen', keylen, '--charset', charset]
         if iv:
             cmd += ['--iv', iv]
         if max_attempts:

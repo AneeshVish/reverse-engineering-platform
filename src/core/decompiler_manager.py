@@ -70,60 +70,115 @@ class DecompilerManager:
         
         return results
     
-    def _run_engine(self, engine_type, assembly_code, binary_path):
-        """Execute a specific decompilation engine"""
+    def _run_engine(self, engine_type, analysis_log, binary_path):
+        """
+        Execute a specific decompilation engine. For the AI decompiler (LLM4DECOMPILE), use analysis logs as input.
+        """
         engine = self.engines[engine_type]
-        
+
         if engine_type == DecompilerEngine.LLM4DECOMPILE:
-            return engine.decompile_assembly(assembly_code)
+            # Use the new method and pass the full analysis log
+            return engine.decompile_analysis_log(analysis_log)
         elif engine_type == DecompilerEngine.GHIDRA:
             return self._run_ghidra(binary_path) if binary_path else "Binary path required for Ghidra"
         elif engine_type == DecompilerEngine.RETDEC:
             return self._run_retdec(binary_path) if binary_path else "Binary path required for RetDec"
         else:
-            return engine.decompile(assembly_code, binary_path)
+            return engine.decompile(analysis_log, binary_path)
     
     def _run_ghidra(self, binary_path):
-        """Run Ghidra decompilation [24]"""
+        """Run Ghidra decompilation [24] with detailed logging for debugging."""
+        import logging
+        logger = logging.getLogger("DecompilerManager._run_ghidra")
         try:
             import subprocess
             import tempfile
-            
-            # Create Ghidra script for headless analysis
-            script_content = f'''
-import ghidra.app.decompiler.DecompInterface;
-import ghidra.program.model.listing.Function;
-import ghidra.program.model.listing.FunctionManager;
+            import shutil
 
-DecompInterface decompiler = new DecompInterface();
-decompiler.openProgram(currentProgram);
+            # Resolve the Ghidra headless launcher: env override, then PATH.
+            # (Never hardcode an absolute path — this must work cross-platform.)
+            ghidra_headless = (
+                os.environ.get("GHIDRA_HEADLESS")
+                or shutil.which("analyzeHeadless")
+                or shutil.which("analyzeHeadless.bat")
+            )
+            if not ghidra_headless:
+                return ("[ERROR] Ghidra not available. Install Ghidra and either add its "
+                        "support/ directory (analyzeHeadless) to PATH or set the "
+                        "GHIDRA_HEADLESS environment variable to the launcher path.")
 
-FunctionManager funcMgr = currentProgram.getFunctionManager();
-Function[] functions = funcMgr.getFunctions(true).toArray();
+            # Create Ghidra Python (Jython) script for headless analysis
+            script_content = '''
+from ghidra.app.decompiler import DecompInterface
+from ghidra.util.task import ConsoleTaskMonitor
 
-for (Function func : functions) {{
-    if (func.getName().equals("main") || func.getName().equals("_start")) {{
-        println("Decompiling: " + func.getName());
-        println(decompiler.decompileFunction(func, 30, null).getDecompiledFunction().getC());
-        break;
-    }}
-}}
+if currentProgram is None:
+    print("[ERROR] No program loaded.")
+    exit()
+
+decompiler = DecompInterface()
+decompiler.openProgram(currentProgram)
+
+fm = currentProgram.getFunctionManager()
+functions = fm.getFunctions(True)
+
+for func in functions:
+    try:
+        print("Decompiling: " + func.getName())
+        res = decompiler.decompileFunction(func, 30, ConsoleTaskMonitor())
+        print(res.getDecompiledFunction().getC())
+        print("=")
+        print("=" * 60)
+        print("=")
+    except Exception as e:
+        print("[ERROR] Failed to decompile function {}: {}".format(func.getName(), e))
 '''
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.java', delete=False) as f:
+
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
                 f.write(script_content)
                 script_path = f.name
-            
-            # Run Ghidra headless
+            import uuid
+            # Use a unique temp project directory for each run
+            project_dir = os.path.join(tempfile.gettempdir(), f"ghidra_project_{uuid.uuid4().hex}")
+            os.makedirs(project_dir, exist_ok=True)
+            logger.info(f"[GHIDRA SCRIPT PATH] {script_path}")
+            logger.info(f"[GHIDRA TEMP PROJECT DIR] {project_dir}")
+            logger.info(f"[GHIDRA BINARY PATH] {binary_path}")
+            ghidra_cmd = [ghidra_headless, project_dir, "temp_project", "-import", binary_path, "-postScript", script_path]
+            logger.info(f"[GHIDRA CMD] {' '.join(ghidra_cmd)}")
             result = subprocess.run(
-                ["analyzeHeadless", tempfile.gettempdir(), "temp_project", "-import", binary_path, "-postScript", script_path],
-                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120
+                ghidra_cmd,
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=7200
             )
-            
-            return result.stdout if result.returncode == 0 else f"Ghidra error: {result.stderr}"
-            
+            # Clean up temp project dir
+            try:
+                shutil.rmtree(project_dir, ignore_errors=True)
+            except Exception as cleanup_exc:
+                logger.warning(f"[GHIDRA CLEANUP] Failed to remove temp project dir: {cleanup_exc}")
+            logger.info(f"[GHIDRA STDOUT]\n{result.stdout}")
+            logger.error(f"[GHIDRA STDERR]\n{result.stderr}")
+            # --- VERBOSE ERROR OUTPUT ---
+            if result.returncode != 0:
+                logger.error("[GHIDRA VERBOSE ERROR]")
+                logger.error(f"  Command: {' '.join(ghidra_cmd)}")
+                logger.error(f"  Return code: {result.returncode}")
+                logger.error(f"  STDOUT: {result.stdout}")
+                logger.error(f"  STDERR: {result.stderr}")
+                print("[GHIDRA VERBOSE ERROR]")
+                print(f"  Command: {' '.join(ghidra_cmd)}")
+                print(f"  Return code: {result.returncode}")
+                print(f"  STDOUT: {result.stdout}")
+                print(f"  STDERR: {result.stderr}")
+                return f"Ghidra error (verbose):\nCommand: {' '.join(ghidra_cmd)}\nReturn code: {result.returncode}\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+            else:
+                return result.stdout  # FULL C code output, even if very large
         except Exception as e:
-            return f"Ghidra execution failed: {str(e)}"
+            import traceback
+            logger.error(f"Ghidra execution failed: {str(e)}")
+            logger.error(traceback.format_exc())
+            print("[GHIDRA EXCEPTION]")
+            print(traceback.format_exc())
+            return f"Ghidra execution failed: {str(e)}\n{traceback.format_exc()}"
     
     def _run_retdec(self, binary_path):
         """Run RetDec decompilation [18]"""
@@ -133,7 +188,7 @@ for (Function func : functions) {{
             try:
                 result = subprocess.run(
                     ["retdec-decompiler", binary_path],
-                    capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120
+                    capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=800
                 )
                 if result.returncode == 0:
                     output_file = binary_path + ".c"

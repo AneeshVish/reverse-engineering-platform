@@ -24,7 +24,10 @@
   "ai": {
     "enabled": false,
     "api_key": "",
-    "model": "gpt-3.5-turbo",
-    "max_tokens": 1000
+    "model": "gemma3",
+    "max_tokens": 1000,
+    "ollama_endpoint": "http://localhost:11434/api/generate",
+    "use_ollama": true,
+    "ollama_stages": 3
   }
 }

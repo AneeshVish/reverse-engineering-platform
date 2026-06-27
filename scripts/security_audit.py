@@ -1,6 +1,7 @@
 import argparse
 import re
 import os
+import math
 from pathlib import Path
 
 WEAK_ALGOS = ['des', 'rc4', 'md5', 'sha1', 'ecb']

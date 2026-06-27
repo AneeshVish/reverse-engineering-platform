@@ -1,21 +1,21 @@
-import networkx as nx
+from src.core.program_model import ProgramModel
+
 
 class CFGGenerator:
+    """Builds a control-flow graph from a list of instruction dicts.
+
+    Nodes are *basic blocks* (keyed by start address) with real branch-target
+    edges, rather than one node per instruction with only linear edges.
+    """
+
     def __init__(self):
         pass
 
     def build_cfg(self, instructions):
+        """Return a networkx DiGraph of basic blocks.
+
+        Each instruction dict should have at least 'address', 'mnemonic',
+        'op_str' (and ideally 'size').
         """
-        Build a control flow graph from a list of instructions.
-        Each instruction should be a dict with at least 'address', 'mnemonic', and 'op_str'.
-        """
-        G = nx.DiGraph()
-        last_addr = None
-        for instr in instructions:
-            addr = instr.get('address')
-            G.add_node(addr, mnemonic=instr.get('mnemonic'), op_str=instr.get('op_str'))
-            if last_addr is not None:
-                G.add_edge(last_addr, addr)
-            last_addr = addr
-            # TODO: Add edges for jumps/calls/branches based on mnemonic/op_str
-        return G
+        model = ProgramModel(instructions=instructions)
+        return model.build_cfg()

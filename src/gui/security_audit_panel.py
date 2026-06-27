@@ -1,8 +1,11 @@
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QTextEdit, QFileDialog)
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QTextEdit, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView)
 from PyQt6.QtCore import Qt
 import subprocess
 import sys
 import os
+import json
+
+from src.utils.paths import script_path
 
 class SecurityAuditPanel(QWidget):
     def __init__(self, parent=None):
@@ -28,15 +31,42 @@ class SecurityAuditPanel(QWidget):
         self.findings_output.setReadOnly(True)
         layout.addWidget(self.findings_output)
 
+        # Table for structured findings (Type, Value, Offset, File)
+        self.findings_table = QTableWidget()
+        self.findings_table.setColumnCount(4)
+        self.findings_table.setHorizontalHeaderLabels(["Type", "Value", "Offset", "File"])
+        self.findings_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.findings_table)
+
     def run_audit(self):
         target, _ = QFileDialog.getOpenFileName(self, "Select File or Directory to Audit")
         if not target:
             return
-        cmd = [sys.executable, os.path.join("scripts", "security_audit.py"), target]
+        # Run the audit script and capture output (write JSON to a temp file).
+        import tempfile
+        audit_json_path = os.path.join(tempfile.gettempdir(), "re_audit_results.json")
+        cmd = [sys.executable, script_path("security_audit"), target, "--output", audit_json_path]
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         self.last_findings = proc.stdout
         self.patch_btn.setEnabled(True)
-        # Display grouped findings immediately after audit
+
+        # Try to load structured findings from JSON output
+        findings_data = None
+        if os.path.exists(audit_json_path):
+            try:
+                with open(audit_json_path, "r", encoding="utf-8") as f:
+                    findings_data = json.load(f)
+            except Exception:
+                findings_data = None
+        # Remove the temporary audit_results.json file
+        try:
+            os.remove(audit_json_path)
+        except Exception:
+            pass
+
+        # Always show both the structured findings table and the old grouped text output
+        self.findings_table.setRowCount(0)
+        # Build the classic grouped findings output (old way)
         patch_sections = {
             'Master Key': [],
             'Hardcoded Secret': [],
@@ -46,21 +76,62 @@ class SecurityAuditPanel(QWidget):
             'Suspicious Key Material': [],
             'Token': []
         }
-        for line in proc.stdout.splitlines():
-            if 'master_key' in line:
-                patch_sections['Master Key'].append(line)
-            if 'hardcoded_secret' in line:
-                patch_sections['Hardcoded Secret'].append(line)
-            if 'weak_algo' in line:
-                patch_sections['Weak Algorithm'].append(line)
-            if 'insecure_api' in line:
-                patch_sections['Insecure API Usage'].append(line)
-            if 'short_key' in line:
-                patch_sections['Short Key'].append(line)
-            if 'long_key' in line or 'high_entropy_key' in line:
-                patch_sections['Suspicious Key Material'].append(line)
-            if 'token' in line:
-                patch_sections['Token'].append(line)
+        lines = []
+        if findings_data:
+            # Structured: build lines from JSON for grouped output (text output: only show original description)
+            for file_path, issues in findings_data.items():
+                for issue in issues:
+                    t = issue.get('type', '')
+                    desc = issue.get('desc', '')
+                    # Group by type for classic output (only description)
+                    if 'master_key' in t:
+                        patch_sections['Master Key'].append(desc)
+                    if 'hardcoded_secret' in t:
+                        patch_sections['Hardcoded Secret'].append(desc)
+                    if 'weak_algo' in t:
+                        patch_sections['Weak Algorithm'].append(desc)
+                    if 'insecure_api' in t:
+                        patch_sections['Insecure API Usage'].append(desc)
+                    if 'short_key' in t:
+                        patch_sections['Short Key'].append(desc)
+                    if 'long_key' in t or 'high_entropy_key' in t:
+                        patch_sections['Suspicious Key Material'].append(desc)
+                    if 'token' in t:
+                        patch_sections['Token'].append(desc)
+            # Populate table as before
+            rows = []
+            for file_path, issues in findings_data.items():
+                for issue in issues:
+                    t = issue.get('type', '')
+                    v = issue.get('value', issue.get('desc', ''))
+                    offset = issue.get('location', '')
+                    rows.append((t, v, offset, file_path))
+            self.findings_table.setRowCount(len(rows))
+            for i, (t, v, offset, file_path) in enumerate(rows):
+                self.findings_table.setItem(i, 0, QTableWidgetItem(str(t)))
+                self.findings_table.setItem(i, 1, QTableWidgetItem(str(v)))
+                self.findings_table.setItem(i, 2, QTableWidgetItem(str(offset)))
+                self.findings_table.setItem(i, 3, QTableWidgetItem(str(file_path)))
+        else:
+            # Fallback: legacy text parsing
+            for line in proc.stdout.splitlines():
+                lines.append(line)
+                if 'master_key' in line:
+                    patch_sections['Master Key'].append(line)
+                if 'hardcoded_secret' in line:
+                    patch_sections['Hardcoded Secret'].append(line)
+                if 'weak_algo' in line:
+                    patch_sections['Weak Algorithm'].append(line)
+                if 'insecure_api' in line:
+                    patch_sections['Insecure API Usage'].append(line)
+                if 'short_key' in line:
+                    patch_sections['Short Key'].append(line)
+                if 'long_key' in line or 'high_entropy_key' in line:
+                    patch_sections['Suspicious Key Material'].append(line)
+                if 'token' in line:
+                    patch_sections['Token'].append(line)
+            self.findings_table.setRowCount(0)
+        # Build grouped findings output
         findings_output = "\nFindings (by Type):\n"
         for section, findings in patch_sections.items():
             if findings:

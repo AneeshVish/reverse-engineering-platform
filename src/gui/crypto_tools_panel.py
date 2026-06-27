@@ -6,6 +6,8 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
+from src.utils.paths import script_path
+
 class CryptoToolsPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,7 +64,7 @@ class CryptoToolsPanel(QWidget):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Directory to Scan")
         if not dir_path:
             return
-        cmd = [sys.executable, os.path.join("scripts", "scan_encrypted_files.py"), dir_path]
+        cmd = [sys.executable, script_path("scan_encrypted_files"), dir_path]
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         self.output.setPlainText(proc.stdout + proc.stderr)
         self.canvas.hide()
@@ -71,7 +73,7 @@ class CryptoToolsPanel(QWidget):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Binary to Analyze")
         if not file_path:
             return
-        cmd = [sys.executable, os.path.join("scripts", "analyze_crypto_routines.py"), file_path]
+        cmd = [sys.executable, script_path("analyze_crypto_routines"), file_path]
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         self.output.setPlainText(proc.stdout + proc.stderr)
         self.canvas.hide()
@@ -80,10 +82,9 @@ class CryptoToolsPanel(QWidget):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select File to Plot Entropy")
         if not file_path:
             return
-        cmd = [sys.executable, os.path.join("scripts", "plot_entropy.py"), file_path]
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
-        # The plot_entropy script shows a plot itself, but here we plot inline
-        # So, we re-implement entropy calculation and plot
+        # Plot inline. (We intentionally do NOT shell out to scripts/plot_entropy.py
+        # here: that script calls plt.show(), which would block until its window is
+        # closed and freeze this panel.)
         entropies = self.calculate_file_entropy(file_path)
         self.figure.clear()
         ax = self.figure.add_subplot(111)
@@ -127,7 +128,7 @@ class CryptoToolsPanel(QWidget):
         if not input_path or not output_path or not key:
             self.output.setPlainText("Input, output, and key are required.")
             return
-        cmd = [sys.executable, os.path.join("scripts", "decrypt_file.py"), input_path, output_path, key, '--algo', algo]
+        cmd = [sys.executable, script_path("decrypt_file"), input_path, output_path, key, '--algo', algo]
         if iv:
             cmd += ['--iv', iv]
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
