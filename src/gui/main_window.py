@@ -813,12 +813,18 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("RevENG — Reverse Engineering Platform")
+        # Open to fit the available screen (never larger), centered, and allow the
+        # window to shrink — the layout is responsive from here.
+        self.setMinimumSize(900, 600)
         screen = self.screen()
         if screen:
             g = screen.availableGeometry()
-            self.resize(min(1440, g.width()), min(900, g.height()))
+            w = min(1440, int(g.width() * 0.94))
+            h = min(900, int(g.height() * 0.94))
+            self.resize(w, h)
+            self.move(g.x() + (g.width() - w) // 2, g.y() + (g.height() - h) // 2)
         else:
-            self.resize(1440, 900)
+            self.resize(1280, 820)
         self.setDockNestingEnabled(True)
         self.setDockOptions(
             QMainWindow.DockOption.AnimatedDocks | QMainWindow.DockOption.AllowNestedDocks)
@@ -830,16 +836,20 @@ class MainWindow(QMainWindow):
         center = self.create_center_panel()
         self.setCentralWidget(center)
 
-        # Docks: Explorer (left), Insights (right), Log (bottom).
+        # Docks: Explorer (left), Insights (right), Log (bottom). Keep widths a
+        # modest fraction of the window so content never gets pushed off-screen.
         self.explorer_dock = self._add_dock(
             "Explorer", self.create_left_panel(), Qt.DockWidgetArea.LeftDockWidgetArea)
         self.insights_dock = self._add_dock(
             "Insights", self.create_right_panel(), Qt.DockWidgetArea.RightDockWidgetArea)
         self.log_dock = self._add_dock(
             "Log", self._log_dock_widget, Qt.DockWidgetArea.BottomDockWidgetArea)
-        self.resizeDocks([self.explorer_dock], [300], Qt.Orientation.Horizontal)
-        self.resizeDocks([self.insights_dock], [320], Qt.Orientation.Horizontal)
-        self.resizeDocks([self.log_dock], [170], Qt.Orientation.Vertical)
+        win_w = max(self.width(), 1000)
+        side = max(240, min(300, int(win_w * 0.21)))
+        self.resizeDocks([self.explorer_dock, self.insights_dock], [side, side],
+                         Qt.Orientation.Horizontal)
+        self.resizeDocks([self.log_dock], [int(self.height() * 0.2)],
+                         Qt.Orientation.Vertical)
 
         # Far-left activity rail, top toolbar, and the ⌘K command palette.
         self._build_activity_rail()
@@ -1267,6 +1277,10 @@ class MainWindow(QMainWindow):
         self.analysis_tabs = QTabWidget()
         self.analysis_tabs.setDocumentMode(True)
         self.analysis_tabs.setMovable(True)
+        # Many tabs: scroll instead of squishing/eliding labels to "Dis...".
+        self.analysis_tabs.setUsesScrollButtons(True)
+        self.analysis_tabs.setElideMode(Qt.TextElideMode.ElideNone)
+        self.analysis_tabs.tabBar().setExpanding(False)
 
         def add_tab(widget, label, ic=None):
             idx = self.analysis_tabs.addTab(widget, label)
@@ -1396,6 +1410,9 @@ class MainWindow(QMainWindow):
 
         self.right_tabs = QTabWidget()
         self.right_tabs.setDocumentMode(True)
+        self.right_tabs.setUsesScrollButtons(True)
+        self.right_tabs.setElideMode(Qt.TextElideMode.ElideNone)
+        self.right_tabs.tabBar().setExpanding(False)
 
         # Insights summary.
         self.insights_panel = InsightsPanel()
@@ -1418,7 +1435,7 @@ class MainWindow(QMainWindow):
         self.ioc_list = QTreeWidget()
         self.ioc_list.setHeaderLabels(["Type", "Value", "Context"])
         threat_layout.addWidget(self.ioc_list)
-        self.right_tabs.addTab(threat_widget, "Threat Intel")
+        self.right_tabs.addTab(threat_widget, "Threat")
 
         # Settings.
         settings_widget = QWidget()
