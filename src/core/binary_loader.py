@@ -4,6 +4,7 @@ import logging
 import lief
 from enum import Enum
 from pathlib import Path
+logger = logging.getLogger(__name__)
 
 class BinaryType(Enum):
     UNKNOWN = 0
@@ -99,29 +100,26 @@ class BinaryLoader:
                     # Method 1: get_content()
                     content = section.get_content()
                     if content:
-                        print(f"[DEBUG] PE section content retrieved via get_content(): {len(content)} bytes")
+                        logger.debug(f"[DEBUG] PE section content retrieved via get_content(): {len(content)} bytes")
                         return bytes(content)
                 except Exception as e:
-                    print(f"[DEBUG] get_content() failed: {e}")
-                    
+                    logger.error(f"[DEBUG] get_content() failed: {e}")
                 try:
                     # Method 2: Direct content access
                     if hasattr(section, 'content') and section.content:
-                        print(f"[DEBUG] PE section content retrieved via .content: {len(section.content)} bytes")
+                        logger.debug(f"[DEBUG] PE section content retrieved via .content: {len(section.content)} bytes")
                         return bytes(section.content)
                 except Exception as e:
-                    print(f"[DEBUG] Direct content access failed: {e}")
-                    
+                    logger.error(f"[DEBUG] Direct content access failed: {e}")
             else:
                 # ELF/Mach-O handling
                 if section.content:
-                    print(f"[DEBUG] Non-PE section content: {len(section.content)} bytes")
+                    logger.debug(f"[DEBUG] Non-PE section content: {len(section.content)} bytes")
                     return section.content
                     
         except Exception as e:
             self.logger.error(f"Error getting section content: {e}")
-            print(f"[DEBUG] Section content retrieval failed: {e}")
-        
+            logger.error(f"[DEBUG] Section content retrieval failed: {e}")
         return None
     
     def get_binary_info(self):

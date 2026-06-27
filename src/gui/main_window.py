@@ -56,6 +56,7 @@ from src.gui.network_capture_panel import NetworkCapturePanel
 from src.gui.full_software_panel import FullSoftwarePanel
 from src.intelligence.endpoint_detector import detect_endpoints, format_endpoint_results
 from src.gui.project_analysis_tab import ProjectAnalysisTab  # New import for project analysis tab
+logger = logging.getLogger(__name__)
 
 class BinaryAnalysisWorker(QThread):
     """
@@ -73,11 +74,11 @@ class BinaryAnalysisWorker(QThread):
 
     def run(self):
         try:
-            print("[DEBUG] Starting binary analysis...")
+            logger.debug("[DEBUG] Starting binary analysis...")
             self.progress_update.emit("Loading binary...")
 
             if not self.binary_loader.load(self.file_path):
-                print("[DEBUG] Binary loading failed")
+                logger.error("[DEBUG] Binary loading failed")
                 self.analysis_complete.emit({
                     'binary_info': {'type': 'Unknown', 'path': self.file_path},
                     'instructions': [],
@@ -145,11 +146,11 @@ class BinaryAnalysisWorker(QThread):
                     if arch is not None:
                         self.disassembler.initialize(arch)
                         bin_info['arch'] = str(arch)
-                        print(f"[DEBUG] Disassembler initialized for arch: {arch}")
+                        logger.debug(f"[DEBUG] Disassembler initialized for arch: {arch}")
                     else:
-                        print("[DEBUG] Could not detect architecture, skipping disassembly.")
+                        logger.debug("[DEBUG] Could not detect architecture, skipping disassembly.")
                 except Exception as e:
-                    print(f"[DEBUG] Architecture detection/init error: {e}")
+                    logger.debug(f"[DEBUG] Architecture detection/init error: {e}")
                 # Actually disassemble the code sections
                 for section in sections:
                     if section['name'] in ['.text', '__text', 'CODE']:
@@ -162,8 +163,8 @@ class BinaryAnalysisWorker(QThread):
                                 section.get('virtual_address', 0)
                             )
                             if instructions:
-                                print(f"[DEBUG] Example instructions: {[i['mnemonic'] for i in instructions[:10]]}")
-                                print(f"[DEBUG] Generated {len(instructions)} instructions")
+                                logger.debug(f"[DEBUG] Example instructions: {[i['mnemonic'] for i in instructions[:10]]}")
+                                logger.debug(f"[DEBUG] Generated {len(instructions)} instructions")
             # For unsupported or raw files, we skip disassembly on purpose
 
             # Best-effort function discovery from the parsed binary (LIEF).
@@ -177,8 +178,7 @@ class BinaryAnalysisWorker(QThread):
                             functions.append({'name': name, 'address': int(addr)})
                     functions.sort(key=lambda d: d['address'])
             except Exception as fe:
-                print(f"[DEBUG] Function discovery failed: {fe}")
-
+                logger.error(f"[DEBUG] Function discovery failed: {fe}")
             self.analysis_complete.emit({
                 'binary_info': bin_info,
                 'instructions': instructions,
@@ -188,7 +188,7 @@ class BinaryAnalysisWorker(QThread):
             })
 
         except Exception as e:
-            print(f"[DEBUG] Critical error during binary analysis: {str(e)}")
+            logger.debug(f"[DEBUG] Critical error during binary analysis: {str(e)}")
             self.progress_update.emit(f"Error: {str(e)}")
 
 class DecompileWorker(QThread):
@@ -218,7 +218,7 @@ class DecompileWorker(QThread):
             results['consensus'] = consensus
             self.decompile_complete.emit(results)
         except Exception as e:
-            print(f"[DecompileWorker] Something went wrong during decompilation: {str(e)}")
+            logger.error(f"[DecompileWorker] Something went wrong during decompilation: {str(e)}")
             self.progress_update.emit(f"Decompilation error: {str(e)}")
 
 
@@ -248,7 +248,7 @@ class ThreatAnalysisWorker(QThread):
                 'results': threat_results
             })
         except Exception as e:
-            print(f"[ThreatAnalysisWorker] Threat analysis failed: {str(e)}")
+            logger.error(f"[ThreatAnalysisWorker] Threat analysis failed: {str(e)}")
             self.progress_update.emit(f"Threat analysis error: {str(e)}")
 
 class AIWorker(QThread):
@@ -377,12 +377,23 @@ class MainWindow(QMainWindow):
 
     def start_binary_analysis(self, file_path):
         """Start background binary analysis for the selected file."""
+        # Stop any in-flight analysis so two threads never disassemble concurrently
+        # (they used to share one engine, producing duplicated/interleaved output).
+        prev = getattr(self, 'analysis_worker', None)
+        if prev is not None and prev.isRunning():
+            prev.requestInterruption()
+            prev.quit()
+            if not prev.wait(1500):
+                prev.terminate()
+                prev.wait(500)
         if hasattr(self, 'progress_bar'):
             self.progress_bar.setVisible(True)
             self.progress_bar.setFormat("Analyzing binary...")
         if hasattr(self, 'log_view'):
             self.log_view.append(f"[INFO] Starting analysis for: {file_path}")
-        self.analysis_worker = BinaryAnalysisWorker(self.binary_loader, self.disassembler, file_path)
+        # Give each analysis its own loader/disassembler (no shared mutable state).
+        self.analysis_worker = BinaryAnalysisWorker(
+            UniversalLoader(), DisassemblerEngine(), file_path)
         self.analysis_worker.analysis_complete.connect(self.on_analysis_complete)
         self.analysis_worker.progress_update.connect(self.update_progress)
         self.analysis_worker.start()
@@ -945,6 +956,43 @@ class MainWindow(QMainWindow):
             self.start_binary_analysis(self.current_file_path)
         elif hasattr(self, "log_view"):
             self.log_view.append("[INFO] Open a file first to re-analyze.")
+
+    def _running_workers(self):
+        """Collect all QThread workers that might still be running."""
+        workers = []
+        for attr in ("analysis_worker", "decompile_worker", "threat_worker",
+                     "_net_worker", "_full_decompile_worker"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                workers.append(w)
+        workers.extend(getattr(self, "_ai_workers", []))
+        for panel_attr, worker_attr in (("full_software_panel", "analysis_worker"),
+                                        ("network_capture_panel", "capture_thread")):
+            panel = getattr(self, panel_attr, None)
+            w = getattr(panel, worker_attr, None) if panel is not None else None
+            if w is not None:
+                workers.append(w)
+        return workers
+
+    def closeEvent(self, event):
+        """Stop background worker threads cleanly so Qt doesn't abort on exit.
+
+        (Previously, closing while a DecompileWorker/analysis thread was running
+        triggered 'QThread: Destroyed while thread is still running' -> abort.)
+        """
+        for w in self._running_workers():
+            try:
+                if hasattr(w, "isRunning") and w.isRunning():
+                    if hasattr(w, "stop"):
+                        w.stop()
+                    w.requestInterruption()
+                    w.quit()
+                    if not w.wait(2500):
+                        w.terminate()
+                        w.wait(1000)
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     @staticmethod
     def _fmt_size(n):

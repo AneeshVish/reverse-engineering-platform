@@ -8,11 +8,19 @@ from capstone import (
 )
 from enum import Enum
 
+logger = logging.getLogger(__name__)
+
+# Safety cap: a multi-MB code section can produce millions of instructions, which
+# floods memory/UI and makes the app appear to hang. Stop after this many.
+MAX_INSTRUCTIONS = 400_000
+
+
 class Architecture(Enum):
     X86 = 1
     X86_64 = 2
     ARM = 3
     ARM64 = 4
+
 
 class DisassemblerEngine:
     def __init__(self):
@@ -20,27 +28,22 @@ class DisassemblerEngine:
         self.md = None
 
     def initialize(self, architecture, mode=None):
-        """Initialize with enhanced error handling"""
+        """Initialize Capstone for the given architecture. Returns True on success."""
         try:
-            # Set architecture and mode, plus an architecture-appropriate NOP used
-            # only to self-test the engine (x86 NOP is invalid on ARM, which made
-            # ARM/ARM64 init wrongly report failure).
+            # An architecture-appropriate NOP used only to self-test the engine
+            # (an x86 NOP is invalid on ARM, which used to make ARM init fail).
             if architecture == Architecture.X86_64:
                 self.md = Cs(CS_ARCH_X86, CS_MODE_64)
                 test_code = b'\x90'                      # nop
-                print("[DEBUG] Initialized x64 disassembler")
             elif architecture == Architecture.X86:
                 self.md = Cs(CS_ARCH_X86, CS_MODE_32)
                 test_code = b'\x90'                      # nop
-                print("[DEBUG] Initialized x86 disassembler")
             elif architecture == Architecture.ARM64:
                 self.md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
                 test_code = b'\x1f\x20\x03\xd5'          # nop (AArch64)
-                print("[DEBUG] Initialized ARM64 disassembler")
             elif architecture == Architecture.ARM:
                 self.md = Cs(CS_ARCH_ARM, CS_MODE_ARM)
                 test_code = b'\x00\xf0\x20\xe3'          # nop (ARM A32)
-                print("[DEBUG] Initialized ARM disassembler")
             else:
                 self.logger.error(f"Unsupported architecture: {architecture}")
                 return False
@@ -48,55 +51,46 @@ class DisassemblerEngine:
             self.md.detail = True
             self.md.skipdata = True  # Critical for handling mixed code/data
 
-            # Test disassembler with an architecture-appropriate instruction
             test_result = list(self.md.disasm(test_code, 0))
-            if len(test_result) > 0:
-                print("[DEBUG] Disassembler test successful")
-                return True
-            else:
-                print("[DEBUG] Disassembler test failed")
-                return False
-                
+            ok = len(test_result) > 0
+            self.logger.debug("Disassembler initialized for %s (self-test %s)",
+                              architecture, "ok" if ok else "FAILED")
+            return ok
         except Exception as e:
             self.logger.error(f"Disassembler initialization error: {e}")
-            print(f"[DEBUG] Disassembler init exception: {e}")
             return False
 
-    def disassemble(self, code, address=0, chunk_size=0x1000):
-        """Enhanced disassembly with detailed logging"""
+    def disassemble(self, code, address=0, chunk_size=0x1000, max_instructions=MAX_INSTRUCTIONS):
+        """Disassemble `code` starting at `address`. Returns a list of instruction dicts.
+
+        Stops at `max_instructions` to avoid runaway output on very large sections.
+        """
         if not self.md:
-            print("[DEBUG] Disassembler not initialized")
+            self.logger.debug("disassemble() called before initialize()")
             return []
 
         instructions = []
         try:
-            print(f"[DEBUG] Disassembling {len(code)} bytes at 0x{address:08x}")
-            
-            # Process in chunks
+            self.logger.debug("Disassembling %d bytes at 0x%08x", len(code), address)
             for offset in range(0, len(code), chunk_size):
-                chunk = code[offset:offset+chunk_size]
+                chunk = code[offset:offset + chunk_size]
                 chunk_addr = address + offset
-                
-                chunk_instructions = 0
                 for insn in self.md.disasm(chunk, chunk_addr):
                     instructions.append({
                         'address': insn.address,
                         'bytes': bytes(insn.bytes),
                         'mnemonic': insn.mnemonic,
                         'op_str': insn.op_str,
-                        'size': insn.size
+                        'size': insn.size,
                     })
-                    chunk_instructions += 1
-                    
-                if chunk_instructions > 0:
-                    print(f"[DEBUG] Chunk at 0x{chunk_addr:08x}: {chunk_instructions} instructions")
-                    
+                    if len(instructions) >= max_instructions:
+                        self.logger.debug("Reached instruction cap (%d); truncating.",
+                                          max_instructions)
+                        return instructions
         except CsError as e:
             self.logger.error(f"Capstone disassembly error: {e}")
-            print(f"[DEBUG] Capstone error: {e}")
         except Exception as e:
             self.logger.error(f"Disassembly error: {e}")
-            print(f"[DEBUG] Disassembly exception: {e}")
-        
-        print(f"[DEBUG] Total instructions generated: {len(instructions)}")
+
+        self.logger.debug("Generated %d instructions", len(instructions))
         return instructions

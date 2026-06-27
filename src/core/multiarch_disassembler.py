@@ -1,7 +1,9 @@
 import os
+import logging
 import lief
 from capstone import *
 from src.intelligence import pseudocode
+logger = logging.getLogger(__name__)
 
 
 class MultiArchDisassembler:
@@ -13,7 +15,7 @@ class MultiArchDisassembler:
         try:
             self.cs_arch, self.cs_mode = self.detect_arch_mode()
         except Exception as e:
-            print(f"[ERROR] Could not detect architecture for {binary_path}: {e}")
+            logger.error(f"[ERROR] Could not detect architecture for {binary_path}: {e}")
             self.cs_arch, self.cs_mode = CS_ARCH_X86, CS_MODE_64
         self.disassembler = Cs(self.cs_arch, self.cs_mode)
 
@@ -52,7 +54,7 @@ class MultiArchDisassembler:
         elif 'RISCV' in mt:
             return CS_ARCH_RISCV, CS_MODE_RISCV64 if bits == 64 else CS_MODE_RISCV32
         # Default fallback
-        print(f"[WARN] Unknown architecture string '{mt}'. Falling back to x86_64.")
+        logger.warning(f"[WARN] Unknown architecture string '{mt}'. Falling back to x86_64.")
         return CS_ARCH_X86, CS_MODE_64
 
 
