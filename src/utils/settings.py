@@ -93,6 +93,15 @@ class Settings:
        
        self.settings[category][key] = value
    
+   def get_theme(self):
+       '''Get the saved UI theme name (defaults to Tokyo Night).'''
+       return self.get('general', 'theme', 'Tokyo Night')
+
+   def set_theme(self, name):
+       '''Persist the UI theme name.'''
+       self.set('general', 'theme', name)
+       self.save()
+
    def get_plugin_directory(self):
        '''Get the plugin directory'''
        return self.get('directories', 'plugin_dir', 'plugins')
