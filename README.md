@@ -13,9 +13,16 @@ This platform is a friendly, all-in-one toolkit for anyone interested in reverse
 - **AI Decompilation:**
   - Converts tricky assembly into readable C-like code using local LLMs (like Ollama).
   - See results instantly in the "Source Code" tab!
-- **Network Capture:**
-  - Watch real HTTP/HTTPS traffic from any app (via mitmproxy).
-  - Instantly spot API calls, tokens, secrets—great for bug bounties and audits.
+- **Live API Capture (decrypted):**
+  - Point it at the loaded app (or any binary/CLI tool) and hit *Capture & Launch* —
+    the tool launches that app through a local HTTPS interceptor with the mitmproxy
+    CA trusted via env vars, so its **HTTPS is decrypted**.
+  - Structured, real-time view of every **API call**: method + URL, request/response
+    headers and bodies, and extracted **API keys / Bearer tokens / JWTs / secrets** —
+    not a Wireshark packet dump.
+  - No system-wide proxy/cert needed for apps the tool launches (Electron, Node,
+    Python, curl/CLI). Native apps that pin certificates won't decrypt this way
+    (that needs Frida hooking — on the roadmap). Requires `pip install mitmproxy`.
 - **Security Audit:**
   - Scans for hardcoded secrets, weak crypto, and more.
   - Groups findings by type and tells you how to patch them.

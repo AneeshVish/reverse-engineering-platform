@@ -404,6 +404,9 @@ class MainWindow(QMainWindow):
         self.analysis_worker.analysis_complete.connect(self.on_analysis_complete)
         self.analysis_worker.progress_update.connect(self.update_progress)
         self.analysis_worker.start()
+        # Point the live-capture panel at the loaded app.
+        if hasattr(self, 'network_capture_panel'):
+            self.network_capture_panel.set_target(file_path)
 
     def configure_misp(self):
         if hasattr(self, 'log_view'):
@@ -1012,6 +1015,13 @@ class MainWindow(QMainWindow):
                     if not w.wait(2500):
                         w.terminate()
                         w.wait(1000)
+            except Exception:
+                pass
+        # Stop any live network capture (mitmdump + launched app subprocesses).
+        ncp = getattr(self, "network_capture_panel", None)
+        if ncp is not None and hasattr(ncp, "stop_capture"):
+            try:
+                ncp.stop_capture()
             except Exception:
                 pass
         super().closeEvent(event)

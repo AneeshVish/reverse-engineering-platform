@@ -37,3 +37,6 @@ graphviz>=0.20.0
 
 # Beautify minified JS recovered from Electron app.asar (readable source)
 jsbeautifier>=1.14.0
+
+# Live API capture (decrypted HTTPS) — provides mitmdump
+mitmproxy>=10.0.0
