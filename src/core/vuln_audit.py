@@ -25,10 +25,12 @@ from typing import List
 # string value that passes _looks_like_secret() (kills code-identifier noise like
 # `this.clientSecret` or variable names like `customPassword`).
 SECRET_PATTERNS = [
-    # Whole private-key block (header..footer), so the FULL key is shown.
+    # Whole private-key block — require a REAL base64 body right after the header
+    # (so a "-----BEGIN PRIVATE KEY-----" string used in validation code does NOT
+    # match: there, the next chars are code like `")!==0`, not base64).
     ("Private key", "critical",
      re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----"
-                rb"[\s\S]{1,8192}?"
+                rb"\s*[A-Za-z0-9+/=\s]{100,4000}?"
                 rb"-----END (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----"), 0, False),
     ("AWS access key id", "critical", re.compile(rb"AKIA[0-9A-Z]{16}"), 0, False),
     ("AWS secret access key", "critical",
@@ -66,22 +68,37 @@ def _shannon(s):
     return -sum((c / len(s)) * math.log2(c / len(s)) for c in Counter(s).values())
 
 
+_SNAKE_WORDS = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$")     # access_token, xms_cc
+_CAMEL_WORDS = re.compile(r"[A-Z][a-z]{2,}")                       # Oauth/Access/Token segments
+
+
 def _looks_like_secret(v):
-    """True if `v` looks like a real secret VALUE, not a code identifier/word."""
-    if len(v) < 6:
+    """True if `v` looks like a real secret VALUE, not a code identifier/constant.
+
+    Real keys/tokens are RANDOM; constant names (access_token), enum values
+    (Oauth2AccessToken), and code expressions are not. We reject the latter.
+    """
+    if len(v) < 8:
         return False
-    low = v.lower()
-    if low in _NOT_SECRETS:
+    if v.lower() in _NOT_SECRETS:
         return False
-    # Code expression (property access / call / whitespace) -> not a literal secret.
-    if any(ch in v for ch in ".()[] \t"):
+    # Code expression (property access / call / separators) -> not a literal value.
+    if any(ch in v for ch in ".()[]{} \t,;:"):
         return False
-    # A plain camelCase/identifier word with no digits is almost always a variable
-    # name (clientSecret, customPassword), not a secret.
+    has_symbol = any((not c.isalnum()) and c not in "_-" for c in v)
+    if not has_symbol:
+        # Readable identifiers/constants: snake_case words (access_token) or
+        # CamelCase composed of >=2 words (Oauth2AccessToken) -> NOT a secret.
+        if _SNAKE_WORDS.match(v):
+            return False
+        if len(_CAMEL_WORDS.findall(v)) >= 2:
+            return False
     if v.isalpha():
         return False
-    # Require some randomness or length.
-    return _shannon(v) >= 2.6 or len(v) >= 20
+    has_digit = any(c.isdigit() for c in v)
+    # The identifier checks above already reject constants; entropy is a secondary
+    # gate (kept low enough to catch weak-but-real passwords like "hunter2hunter2").
+    return _shannon(v) >= 2.4 and (has_symbol or has_digit or len(v) >= 24)
 
 # Dangerous / weak imported functions (matched against the symbol table — exact,
 # so no "des" inside "description" false positives). key -> (severity, why).
