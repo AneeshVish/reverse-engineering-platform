@@ -53,6 +53,18 @@ def capture_env(port, ca=MITM_CA):
     return env
 
 
+def app_running(name):
+    """True if a process whose command matches `name` is already running."""
+    if not name:
+        return False
+    try:
+        r = subprocess.run(["pgrep", "-i", "-f", name],
+                           capture_output=True, text=True, timeout=5)
+        return bool(r.stdout.strip())
+    except Exception:
+        return False
+
+
 def resolve_launch_target(path):
     """A .app bundle -> its inner executable; otherwise the path itself."""
     if path and path.rstrip("/").endswith(".app") and os.path.isdir(path):

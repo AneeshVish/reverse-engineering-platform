@@ -155,7 +155,14 @@ class NetworkCapturePanel(QWidget):
         if launch:
             target = self.target_edit.text().strip()
             if target:
-                QTimer.singleShot(1500, lambda: self._launch(target, port))
+                base = os.path.basename(target.rstrip("/")).replace(".app", "")
+                if tc.app_running(base):
+                    self.status.setText(
+                        f"⚠ {base} is already running — QUIT it fully first, then click "
+                        "Capture again. (Apps hand a second launch to the running copy, "
+                        "which isn't proxied.)  Meanwhile, Run Test Request still works.")
+                else:
+                    QTimer.singleShot(1500, lambda: self._launch(target, port))
             else:
                 self.status.setText(f"Proxy on :{port} (no target — use Run Test Request, "
                                     "or set a target and Stop/Start)")

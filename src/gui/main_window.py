@@ -1083,6 +1083,8 @@ class MainWindow(QMainWindow):
         from src.intelligence.endpoint_detector import (
             detect_endpoints, format_endpoint_results, extract_strings)
         from src.core import electron, network_intel
+        self._electron_source_shown = False   # reset per analysis
+        self._electron_src_dir = None
         try:
             sources = []
             if self.current_file_path and os.path.isfile(self.current_file_path):
@@ -1186,6 +1188,7 @@ class MainWindow(QMainWindow):
                     f"(largest JS, first 600 KB shown — full file at {src_dir}) =====\n"
                     + text)
         self.source_code_view.setPlainText(header + listing + body)
+        self._electron_source_shown = True   # AI must not overwrite this real source
 
     def _update_insights(self, results):
         """Populate the right-dock Insights panel + status bar from results."""
@@ -1713,164 +1716,40 @@ class MainWindow(QMainWindow):
             self.log_view.append("[WARN] Full decompilation produced no usable output.")
 
     def on_decompile_complete(self, results):
-        # Update AI analysis panel with results as before
-        self.ai_analysis_panel.update_analysis_results(results)
-        # Try to show Ghidra/RetDec, but if they fail, show AI (Ollama) output if available
-        ghidra_result = results.get('ghidra', {})
-        retdec_result = results.get('retdec', {})
-        ai_result = results.get(getattr(self.decompiler_manager, 'DecompilerEngine', None).LLM4DECOMPILE if hasattr(self.decompiler_manager, 'DecompilerEngine') else 'llm4decompile', {})
-        # Fallback: try string key if enum is not available
-        if not ai_result:
-            ai_result = results.get('llm4decompile', {})
-            if not ai_result:
-                # Try enum type if present
-                from src.core.decompiler_manager import DecompilerEngine
-                ai_result = results.get(DecompilerEngine.LLM4DECOMPILE, {})
-        code = None
-        engine_used = None
-        # Prefer Ghidra, then RetDec, then AI (Ollama)
-        if ghidra_result.get('success') and ghidra_result.get('code') and 'error' not in ghidra_result.get('code', '').lower() and 'failed' not in ghidra_result.get('code', '').lower():
-            code = ghidra_result['code']
-            engine_used = 'Ghidra'
-        elif retdec_result.get('success') and retdec_result.get('code') and 'error' not in retdec_result.get('code', '').lower() and 'failed' not in retdec_result.get('code', '').lower():
-            code = retdec_result['code']
-            engine_used = 'RetDec'
-        elif ai_result.get('success') and ai_result.get('code'):
-            code = ai_result['code']
-            engine_used = 'Ollama AI'
-        else:
-            code = "[ERROR] All decompilation engines failed. No C code available."
-            engine_used = 'None'
-        # Chunked, non-blocking loading for very large code output
-        from PyQt6.QtCore import QTimer
-        self.source_code_view.clear()
-        if hasattr(self, 'progress_bar'):
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setMaximum(0)  # Indeterminate
-        code_lines = code.splitlines(keepends=True)
-        chunk_size = 5000
-        total_lines = len(code_lines)
-        self._source_code_chunk_index = 0
-        def append_next_chunk():
-            start = self._source_code_chunk_index
-            end = min(start + chunk_size, total_lines)
-            chunk = ''.join(code_lines[start:end])
-            from PyQt6.QtGui import QTextCursor
-            self.source_code_view.moveCursor(QTextCursor.MoveOperation.End)
-            self.source_code_view.insertPlainText(chunk)
-            self._source_code_chunk_index = end
-            if hasattr(self, 'progress_bar'):
-                self.progress_bar.setFormat(f"Loading C code: {end}/{total_lines} lines")
-            if end < total_lines:
-                QTimer.singleShot(10, append_next_chunk)
-            else:
-                if hasattr(self, 'progress_bar'):
-                    self.progress_bar.setVisible(False)
+        """AI/engine decompilation finished.
 
-        append_next_chunk()
+        AI (Ollama) output goes ONLY to the AI Decompilation tab. The Source Code
+        tab is reserved for REAL source: Ghidra/RetDec C, or extracted Electron JS.
+        We never overwrite it with hallucinated AI output.
+        """
+        try:
+            self.ai_analysis_panel.update_analysis_results(results)
+        except Exception:
+            pass
+        if hasattr(self, "progress_bar"):
+            self.progress_bar.setVisible(False)
 
-        # Check if output is not valid C code and warn the user (for AI output or others)
-        c_code = self.source_code_view.toPlainText()
-        c_keywords = ['#include', 'int main', 'void ', 'char ', 'struct ', 'return ', 'printf', 'scanf']
-        is_valid_c = any(keyword in c_code for keyword in c_keywords)
-        is_generic = False
-        # Heuristic: if code is just wrappers or has too many asm/volatile/extern lines, or function names are just instruction mnemonics
-        suspicious_patterns = [
-            'extern "C" void', '__asm__', 'volatile', 'mov_', 'call_', 'jmp_', 'test_', 'push_', 'pop_', 'ret()', 'add_', 'sub_', 'xor_', 'and_', 'or_', 'shr_', 'shl_', 'ror_', 'rol_'
-        ]
-        generic_count = sum(pattern in c_code for pattern in suspicious_patterns)
-        if not is_valid_c or generic_count >= 3:
-            is_generic = True
-            if hasattr(self, 'log_view'):
-                self.log_view.append("[WARNING] The output does not appear to be valid C code. It may be an explanation, generic wrappers, or hallucinated code instead of real decompiled source.")
-                self.log_view.append("[ADVICE] If this is an AI result, try using a simpler or unpacked binary. If the binary is packed (e.g., UPX), unpack it and retry. If using a custom model, ensure it is trained for binary-to-C translation.")
-            self.source_code_view.append("\n// [WARNING] The output does not appear to be valid C code. It may be an explanation, generic wrappers, or hallucinated code instead of real decompiled source.\n")
-            self.source_code_view.append("// [ADVICE] Try using a simpler or unpacked binary. If the binary is packed (e.g., UPX), unpack it and retry.\n")
+        def _good(r):
+            c = r.get("code", "") if isinstance(r, dict) else ""
+            return bool(c) and "error" not in c.lower() and "failed" not in c.lower()
 
-        # --- Analysis log error/missing check for AI decompilation ---
-        if hasattr(self, 'last_analysis_results'):
-            analysis_log = self.last_analysis_results.get('analysis_log', '')
-            binary_path = getattr(self, 'current_file_path', None)
-            upx_detected = False
-            # If the analysis log is mostly errors or missing sections, block AI decompilation and show a warning
-            error_lines = [l for l in analysis_log.splitlines() if any(
-                err in l.lower() for err in [
-                    'unable to find the section',
-                    'can\'t read',
-                    'failed',
-                    'error',
-                    'incomplete',
-                    'not found',
-                    'missing',
-                    'parse',
-                    'exception',
-                    'no program loaded',
-                    'not supported',
-                    'unsupported',
-                    'not implemented'
-                ])]
-            non_empty_lines = [l for l in analysis_log.splitlines() if l.strip()]
-            if len(non_empty_lines) > 0 and len(error_lines) / len(non_empty_lines) > 0.6:
-                # More than 60% of the log is errors: block AI decompilation
-                if hasattr(self, 'log_view'):
-                    self.log_view.append("[FATAL] The analysis log is mostly errors or missing sections. AI decompilation is blocked because results will be meaningless.\nPlease unpack, fix the binary, or use a different file.")
-                self.source_code_view.setPlainText("// [FATAL] The analysis log is mostly errors or missing sections. AI decompilation is blocked because results will be meaningless.\n// Please unpack, fix the binary, or use a different file.\n")
-                # Optionally, early return here to block further display
-                return
-            # --- UPX/packer detection as before ---
-            if any(packer in analysis_log.lower() for packer in ['upx', 'packed', 'packer', 'aspack', 'petite', 'fsg']):
-                upx_detected = True
-            else:
-                try:
-                    from src.core.ai_decompiler import AIDecompiler
-                    if binary_path and AIDecompiler.is_upx_packed(binary_path):
-                        upx_detected = True
-                except Exception:
-                    pass
-            if upx_detected:
-                if hasattr(self, 'log_view'):
-                    self.log_view.append("[WARNING] This binary appears to be packed (e.g., with UPX or another packer). Please unpack it before attempting AI decompilation for best results.")
-                    try:
-                        from src.core.ai_decompiler import AIDecompiler
-                        unpacked_path = AIDecompiler.auto_unpack_upx(binary_path) if binary_path else None
-                        if unpacked_path:
-                            self.log_view.append(f"[INFO] The binary was auto-unpacked to {unpacked_path}. Please re-run analysis on this file for improved AI results.")
-                        else:
-                            self.log_view.append("[INFO] UPX was not found or auto-unpack failed. Please unpack manually with 'upx -d <file>' and retry.")
-                    except Exception:
-                        self.log_view.append("[INFO] UPX auto-unpack check failed. Please unpack manually if needed.")
-                self.source_code_view.append("// [WARNING] This binary appears to be packed (e.g., with UPX or another packer). Please unpack it before attempting AI decompilation for best results.\n")
-        # --- Add analysis log viewer button/panel ---
-        if not hasattr(self, 'analysis_log_viewer_btn'):
-            from PyQt6.QtWidgets import QPushButton, QDialog, QVBoxLayout, QTextEdit
-            def show_analysis_log():
-                dlg = QDialog(self)
-                dlg.setWindowTitle("Analysis Log Viewer")
-                layout = QVBoxLayout()
-                txt = QTextEdit()
-                txt.setReadOnly(True)
-                txt.setPlainText(self.last_analysis_results.get('analysis_log', 'No analysis log available.'))
-                layout.addWidget(txt)
-                dlg.setLayout(layout)
-                dlg.resize(900, 600)
-                dlg.exec()
-            self.analysis_log_viewer_btn = QPushButton("View Analysis Log", self)
-            self.analysis_log_viewer_btn.clicked.connect(show_analysis_log)
-            if hasattr(self, 'log_view'):
-                self.log_view.append("[INFO] You can view the raw analysis log by clicking the 'View Analysis Log' button below the log panel.")
-            # Add the button to the main window layout (if not already present)
-            if hasattr(self, 'log_view') and hasattr(self.log_view, 'parentWidget'):
-                parent = self.log_view.parentWidget()
-                if hasattr(parent, 'layout') and parent.layout():
-                    parent.layout().addWidget(self.analysis_log_viewer_btn)
+        ghidra = results.get("ghidra", {}) or {}
+        retdec = results.get("retdec", {}) or {}
+        code, engine = None, None
+        if _good(ghidra):
+            code, engine = ghidra["code"], "Ghidra"
+        elif _good(retdec):
+            code, engine = retdec["code"], "RetDec"
 
-
-        if engine_used and engine_used != 'None':
-            self.log_view.append(f"[INFO] Source Code tab updated with {engine_used} C decompilation.")
-            self.log_view.append(f"[INFO] Decompilation complete ({engine_used})")
-        else:
-            self.log_view.append("[ERROR] All decompilation engines failed. No C code available.")
-            self.log_view.append("[INFO] Decompilation complete")
+        # Only put REAL decompiler output in Source Code, and never clobber the
+        # extracted Electron JS source that is already shown there.
+        if code and not getattr(self, "_electron_source_shown", False):
+            self.source_code_view.setPlainText(code)
+            if hasattr(self, "log_view"):
+                self.log_view.append(f"[INFO] Source Code tab: {engine} C decompilation.")
+        elif hasattr(self, "log_view"):
+            self.log_view.append("[INFO] AI decompilation is in the AI Decompilation tab "
+                                 "(Source Code keeps real decompiler / Electron source).")
 
     def setup_menu(self):
         menubar = self.menuBar()
@@ -2061,7 +1940,8 @@ class MainWindow(QMainWindow):
                 functions=results.get('functions', []),
                 instructions=(self.program_model.instructions
                               if getattr(self, 'program_model', None) else []),
-                imports=results.get('imports', []))
+                imports=results.get('imports', []),
+                source_dir=getattr(self, '_electron_src_dir', None))
 
         # Feed the Visualization tab (entropy map + basic-block CFG) from real data.
         try:

@@ -67,5 +67,15 @@ def test_no_substring_false_positive():
     assert findings == []
 
 
+def test_audit_source_text_finds_secrets_in_js():
+    js = (b'const cfg = { api_key: "AKIAIOSFODNN7EXAMPLE", '
+          b'password: "hunter2hunter2" };')
+    findings = va.audit_source_text("bundle.js", js)
+    cats = {f.category: f for f in findings}
+    assert "AWS access key id" in cats
+    assert cats["AWS access key id"].section == "bundle.js"
+    assert any(f.category == "Hardcoded password" for f in findings)
+
+
 def test_format_report_empty():
     assert "No concrete vulnerabilities" in va.format_report([])

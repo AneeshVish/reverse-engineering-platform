@@ -85,10 +85,10 @@ class SecurityAuditPanel(QWidget):
 
     # -- context from the main window ----------------------------------------
 
-    def set_context(self, path, sections, functions, instructions, imports):
+    def set_context(self, path, sections, functions, instructions, imports, source_dir=None):
         self._ctx = {
             "path": path, "sections": sections, "functions": functions,
-            "instructions": instructions, "imports": imports,
+            "instructions": instructions, "imports": imports, "source_dir": source_dir,
         }
         self.summary.setText("Ready — click Run Security Audit.")
 
@@ -108,6 +108,23 @@ class SecurityAuditPanel(QWidget):
         self._findings = vuln_audit.audit(
             data, self._ctx["sections"], self._ctx["functions"],
             self._ctx["instructions"], self._ctx["imports"])
+        # For Electron apps, also scan the extracted JS source — that's where the
+        # real secrets live (the native binary is just a launcher stub).
+        src_dir = self._ctx.get("source_dir")
+        if src_dir:
+            import glob
+            import os
+            for f in glob.glob(os.path.join(src_dir, "**", "*"), recursive=True):
+                if os.path.isfile(f) and f.lower().endswith(
+                        (".js", ".mjs", ".cjs", ".json", ".html", ".env", ".cfg", ".config", ".ts")):
+                    try:
+                        with open(f, "rb") as fh:
+                            tb = fh.read(8 * 1024 * 1024)
+                    except OSError:
+                        continue
+                    self._findings.extend(
+                        vuln_audit.audit_source_text(os.path.relpath(f, src_dir), tb))
+            self._findings.sort(key=lambda fd: fd.sort_key())
         self._populate()
 
     def _populate(self):

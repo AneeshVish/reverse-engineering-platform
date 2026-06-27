@@ -304,6 +304,34 @@ def audit(data, sections, functions, instructions, imports=None):
     return findings
 
 
+def audit_source_text(source_name, text_bytes):
+    """Run the secret detectors over a text/source file (e.g. extracted Electron JS).
+
+    Findings carry the file name + byte offset as their location (no VA/xref, since
+    this is source, not a disassembled binary).
+    """
+    findings = []
+    seen = set()
+    for label, severity, pat, grp in SECRET_PATTERNS:
+        for m in pat.finditer(text_bytes):
+            has_grp = grp and m.lastindex and m.lastindex >= grp
+            raw = m.group(grp) if has_grp else m.group(0)
+            try:
+                value = raw.decode("latin-1", "replace")
+            except Exception:
+                value = str(raw)
+            offset = m.start(grp) if has_grp else m.start()
+            key = (label, value, source_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                category=label, severity=severity, value=value[:200],
+                file_offset=offset, section=source_name, vaddr=0,
+                detail=f"Embedded {label.lower()} in source file '{source_name}' at byte {offset}."))
+    return findings
+
+
 def format_report(findings):
     if not findings:
         return "No concrete vulnerabilities mapped."
