@@ -100,7 +100,8 @@ class BinaryAnalysisWorker(QThread):
                         {
                             'name': getattr(s, 'name', ''),
                             'size': getattr(s, 'size', 0),
-                            'virtual_address': getattr(s, 'virtual_address', 0)
+                            'virtual_address': getattr(s, 'virtual_address', 0),
+                            'offset': getattr(s, 'offset', 0),   # file offset (for VA mapping)
                         } for s in getattr(parsed, 'sections', [])
                     ]
                     bin_info['sections'] = sections
@@ -119,17 +120,29 @@ class BinaryAnalysisWorker(QThread):
                     # Try to detect architecture using LIEF header fields
                     if parsed is not None and hasattr(parsed, 'header'):
                         header = parsed.header
-                        if hasattr(header, 'machine_type'):
+                        # Mach-O carries cpu_type (critical on Apple Silicon: a thin
+                        # arm64 binary must NOT be disassembled as x86).
+                        if hasattr(header, 'cpu_type'):
+                            ct = str(header.cpu_type).upper()
+                            if 'ARM64' in ct or 'AARCH64' in ct:
+                                arch = Architecture.ARM64
+                            elif 'X86_64' in ct or 'AMD64' in ct:
+                                arch = Architecture.X86_64
+                            elif 'ARM' in ct:
+                                arch = Architecture.ARM
+                            elif 'X86' in ct or 'I386' in ct:
+                                arch = Architecture.X86
+                        if arch is None and hasattr(header, 'machine_type'):
                             machine = str(header.machine_type)
                             if 'AMD64' in machine or 'X86_64' in machine:
                                 arch = Architecture.X86_64
+                            elif 'AARCH64' in machine or 'ARM64' in machine:
+                                arch = Architecture.ARM64
                             elif 'I386' in machine or 'X86' in machine:
                                 arch = Architecture.X86
-                            elif 'ARM64' in machine:
-                                arch = Architecture.ARM64
                             elif 'ARM' in machine:
                                 arch = Architecture.ARM
-                        elif hasattr(header, 'arch'):
+                        elif arch is None and hasattr(header, 'arch'):
                             arch_val = str(header.arch)
                             if 'x86_64' in arch_val:
                                 arch = Architecture.X86_64
@@ -179,11 +192,24 @@ class BinaryAnalysisWorker(QThread):
                     functions.sort(key=lambda d: d['address'])
             except Exception as fe:
                 logger.error(f"[DEBUG] Function discovery failed: {fe}")
+
+            # Imported symbol names (for the dangerous-import vuln check).
+            imports = []
+            try:
+                if parsed is not None and hasattr(parsed, 'imported_functions'):
+                    for imp in parsed.imported_functions:
+                        nm = getattr(imp, 'name', None) or str(imp)
+                        if nm:
+                            imports.append(nm)
+            except Exception:
+                imports = []
+
             self.analysis_complete.emit({
                 'binary_info': bin_info,
                 'instructions': instructions,
                 'sections': sections,
                 'functions': functions,
+                'imports': imports,
                 'file_path': self.file_path
             })
 
@@ -1365,6 +1391,7 @@ class MainWindow(QMainWindow):
         try:
             from src.gui.security_audit_panel import SecurityAuditPanel
             self.security_audit_panel = SecurityAuditPanel()
+            self.security_audit_panel.navigate_requested.connect(self.navigate_to_address)
             add_tab(self.security_audit_panel, "Security Audit", "fa5s.shield-alt")
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to load Security Audit panel: {e}")
@@ -1545,6 +1572,27 @@ class MainWindow(QMainWindow):
         except Exception as e:
             if hasattr(self, 'log_view'):
                 self.log_view.append(f"[WARN] Could not navigate to function: {e}")
+
+    def navigate_to_address(self, addr):
+        """Jump the Disassembly view to a virtual address (used by Security Audit)."""
+        try:
+            addr = int(addr)
+            doc = self.disassembly_view
+            text = doc.toPlainText()
+            idx = text.find(f"{addr:08x}:")
+            if idx < 0:
+                idx = text.find(f"{addr:x}:")
+            if idx >= 0:
+                cursor = doc.textCursor()
+                cursor.setPosition(idx)
+                doc.setTextCursor(cursor)
+                doc.ensureCursorVisible()
+                self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
+            elif hasattr(self, 'log_view'):
+                self.log_view.append(f"[INFO] 0x{addr:x} not in the disassembled range.")
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[WARN] Navigate failed: {e}")
 
     def show_cfg_viewer(self):
         """Show the control flow graph for the current disassembly."""
@@ -2004,6 +2052,16 @@ class MainWindow(QMainWindow):
 
         # Populate the Insights panel + status bar from the gathered facts.
         self._update_insights(results)
+
+        # Give the Security Audit panel everything it needs for the concrete map.
+        if hasattr(self, 'security_audit_panel'):
+            self.security_audit_panel.set_context(
+                path=self.current_file_path,
+                sections=results.get('sections', []),
+                functions=results.get('functions', []),
+                instructions=(self.program_model.instructions
+                              if getattr(self, 'program_model', None) else []),
+                imports=results.get('imports', []))
 
         # Feed the Visualization tab (entropy map + basic-block CFG) from real data.
         try:

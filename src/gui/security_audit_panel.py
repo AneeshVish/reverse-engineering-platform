@@ -1,230 +1,177 @@
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QTextEdit, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView)
-from PyQt6.QtCore import Qt
-import subprocess
-import sys
-import os
-import json
+"""Concrete, navigable Security Audit.
 
-from src.utils.paths import script_path
+Driven by src/core/vuln_audit: every finding has exact coordinates (section +
+virtual address + enclosing function) and cross-references to the code that uses
+it. Double-click a finding or a cross-reference to jump to that address in the
+Disassembly view.
+"""
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSplitter,
+    QTableWidget, QTableWidgetItem, QTextEdit, QListWidget, QListWidgetItem,
+    QHeaderView, QAbstractItemView,
+)
+
+_SEV_COLOR = {
+    "critical": "#f7768e", "high": "#ff9e64", "medium": "#e0af68", "low": "#9ece6a",
+}
+
 
 class SecurityAuditPanel(QWidget):
+    # Emitted with a virtual address to navigate to in the Disassembly view.
+    navigate_requested = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.init_ui()
-        self.last_findings = None
+        self._ctx = None
+        self._findings = []
+        self._build()
 
-    def init_ui(self):
+    def _build(self):
         layout = QVBoxLayout(self)
-        self.audit_btn = QPushButton("Run Security Audit (Find Weaknesses)")
-        self.audit_btn.clicked.connect(self.run_audit)
-        layout.addWidget(self.audit_btn)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
-        self.patch_btn = QPushButton("Show Patch Recommendations (Requires User Consent)")
-        self.patch_btn.clicked.connect(self.show_patch_recommendations)
-        self.patch_btn.setEnabled(False)
-        layout.addWidget(self.patch_btn)
+        title = QLabel("Concrete Vulnerability Map")
+        title.setObjectName("Heading")
+        layout.addWidget(title)
+        info = QLabel(
+            "Every finding is resolved to its exact location (section + address + "
+            "function) and cross-referenced to the code that USES it. "
+            "Double-click a finding or a cross-reference to jump straight to it.")
+        info.setObjectName("Dim")
+        info.setWordWrap(True)
+        layout.addWidget(info)
 
-        self.output = QTextEdit()
-        self.output.setReadOnly(True)
-        layout.addWidget(self.output)
-        self.findings_output = QTextEdit()
-        self.findings_output.setReadOnly(True)
-        layout.addWidget(self.findings_output)
+        row = QHBoxLayout()
+        self.run_btn = QPushButton("Run Security Audit")
+        self.run_btn.setObjectName("Primary")
+        self.run_btn.clicked.connect(self.run_audit)
+        row.addWidget(self.run_btn)
+        self.summary = QLabel("Load a binary, then run the audit.")
+        self.summary.setObjectName("Dim")
+        row.addWidget(self.summary)
+        row.addStretch()
+        layout.addLayout(row)
 
-        # Table for structured findings (Type, Value, Offset, File)
-        self.findings_table = QTableWidget()
-        self.findings_table.setColumnCount(4)
-        self.findings_table.setHorizontalHeaderLabels(["Type", "Value", "Offset", "File"])
-        self.findings_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.findings_table)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ["Severity", "Category", "Value", "Location", "Function", "Used by"])
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.itemSelectionChanged.connect(self._show_detail)
+        self.table.itemDoubleClicked.connect(self._jump_to_finding)
+        split.addWidget(self.table)
+
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        self.detail = QTextEdit()
+        self.detail.setReadOnly(True)
+        rl.addWidget(self.detail, 1)
+        xlabel = QLabel("Cross-references — double-click to jump to that address")
+        xlabel.setObjectName("Dim")
+        rl.addWidget(xlabel)
+        self.xref_list = QListWidget()
+        self.xref_list.itemDoubleClicked.connect(self._jump_to_xref)
+        rl.addWidget(self.xref_list, 1)
+        split.addWidget(right)
+        split.setSizes([720, 520])
+        layout.addWidget(split, 1)
+
+    # -- context from the main window ----------------------------------------
+
+    def set_context(self, path, sections, functions, instructions, imports):
+        self._ctx = {
+            "path": path, "sections": sections, "functions": functions,
+            "instructions": instructions, "imports": imports,
+        }
+        self.summary.setText("Ready — click Run Security Audit.")
+
+    # -- run -----------------------------------------------------------------
 
     def run_audit(self):
-        target, _ = QFileDialog.getOpenFileName(self, "Select File or Directory to Audit")
-        if not target:
+        from src.core import vuln_audit
+        if not self._ctx or not self._ctx.get("path"):
+            self.summary.setText("Open a binary first.")
             return
-        # Run the audit script and capture output (write JSON to a temp file).
-        import tempfile
-        audit_json_path = os.path.join(tempfile.gettempdir(), "re_audit_results.json")
-        cmd = [sys.executable, script_path("security_audit"), target, "--output", audit_json_path]
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
-        self.last_findings = proc.stdout
-        self.patch_btn.setEnabled(True)
-
-        # Try to load structured findings from JSON output
-        findings_data = None
-        if os.path.exists(audit_json_path):
-            try:
-                with open(audit_json_path, "r", encoding="utf-8") as f:
-                    findings_data = json.load(f)
-            except Exception:
-                findings_data = None
-        # Remove the temporary audit_results.json file
         try:
-            os.remove(audit_json_path)
-        except Exception:
-            pass
-
-        # Always show both the structured findings table and the old grouped text output
-        self.findings_table.setRowCount(0)
-        # Build the classic grouped findings output (old way)
-        patch_sections = {
-            'Master Key': [],
-            'Hardcoded Secret': [],
-            'Weak Algorithm': [],
-            'Insecure API Usage': [],
-            'Short Key': [],
-            'Suspicious Key Material': [],
-            'Token': []
-        }
-        lines = []
-        if findings_data:
-            # Structured: build lines from JSON for grouped output (text output: only show original description)
-            for file_path, issues in findings_data.items():
-                for issue in issues:
-                    t = issue.get('type', '')
-                    desc = issue.get('desc', '')
-                    # Group by type for classic output (only description)
-                    if 'master_key' in t:
-                        patch_sections['Master Key'].append(desc)
-                    if 'hardcoded_secret' in t:
-                        patch_sections['Hardcoded Secret'].append(desc)
-                    if 'weak_algo' in t:
-                        patch_sections['Weak Algorithm'].append(desc)
-                    if 'insecure_api' in t:
-                        patch_sections['Insecure API Usage'].append(desc)
-                    if 'short_key' in t:
-                        patch_sections['Short Key'].append(desc)
-                    if 'long_key' in t or 'high_entropy_key' in t:
-                        patch_sections['Suspicious Key Material'].append(desc)
-                    if 'token' in t:
-                        patch_sections['Token'].append(desc)
-            # Populate table as before
-            rows = []
-            for file_path, issues in findings_data.items():
-                for issue in issues:
-                    t = issue.get('type', '')
-                    v = issue.get('value', issue.get('desc', ''))
-                    offset = issue.get('location', '')
-                    rows.append((t, v, offset, file_path))
-            self.findings_table.setRowCount(len(rows))
-            for i, (t, v, offset, file_path) in enumerate(rows):
-                self.findings_table.setItem(i, 0, QTableWidgetItem(str(t)))
-                self.findings_table.setItem(i, 1, QTableWidgetItem(str(v)))
-                self.findings_table.setItem(i, 2, QTableWidgetItem(str(offset)))
-                self.findings_table.setItem(i, 3, QTableWidgetItem(str(file_path)))
-        else:
-            # Fallback: legacy text parsing
-            for line in proc.stdout.splitlines():
-                lines.append(line)
-                if 'master_key' in line:
-                    patch_sections['Master Key'].append(line)
-                if 'hardcoded_secret' in line:
-                    patch_sections['Hardcoded Secret'].append(line)
-                if 'weak_algo' in line:
-                    patch_sections['Weak Algorithm'].append(line)
-                if 'insecure_api' in line:
-                    patch_sections['Insecure API Usage'].append(line)
-                if 'short_key' in line:
-                    patch_sections['Short Key'].append(line)
-                if 'long_key' in line or 'high_entropy_key' in line:
-                    patch_sections['Suspicious Key Material'].append(line)
-                if 'token' in line:
-                    patch_sections['Token'].append(line)
-            self.findings_table.setRowCount(0)
-        # Build grouped findings output
-        findings_output = "\nFindings (by Type):\n"
-        for section, findings in patch_sections.items():
-            if findings:
-                findings_output += f"\n===== {section} =====\n" + "\n".join(findings) + "\n"
-        if findings_output.strip() == "Findings (by Type):":
-            self.findings_output.setPlainText("\nNo findings detected.")
-        else:
-            self.findings_output.setPlainText(findings_output)
-
-    def show_patch_recommendations(self):
-        if not self.last_findings:
-            self.output.setPlainText("Run an audit first.")
+            with open(self._ctx["path"], "rb") as f:
+                data = f.read()
+        except OSError as e:
+            self.summary.setText(f"Could not read binary: {e}")
             return
-        # Only show recommendations after explicit user action
-        patch_sections = {
-            'Hardcoded Secret': [],
-            'Weak Algorithm': [],
-            'Insecure API Usage': [],
-            'Short Key': [],
-            'Suspicious Key Material': [],
-            'Token': []
-        }
-        for line in self.last_findings.splitlines():
-            if 'hardcoded_secret' in line:
-                patch_sections['Hardcoded Secret'].append(line)
-            if 'weak_algo' in line:
-                patch_sections['Weak Algorithm'].append(line)
-            if 'insecure_api' in line:
-                patch_sections['Insecure API Usage'].append(line)
-            if 'short_key' in line:
-                patch_sections['Short Key'].append(line)
-            if 'long_key' in line or 'high_entropy_key' in line:
-                patch_sections['Suspicious Key Material'].append(line)
-            if 'token' in line:
-                patch_sections['Token'].append(line)
-        findings_output = "\nFindings (by Type):\n"
-        for section, findings in patch_sections.items():
-            if findings:
-                findings_output += f"\n===== {section} =====\n" + "\n".join(findings) + "\n"
-        if findings_output.strip() == "Findings (by Type):":
-            self.findings_output.setPlainText("\nNo findings detected.")
-        else:
-            self.findings_output.setPlainText(findings_output)
-        # Patch recommendations as before
-        patch_steps = {
-            'Hardcoded Secret': """
-Step 1: Locate the hardcoded secret/key in your source or binary (see finding for exact value and location).
-Step 2: Remove the secret from code. Replace it with a reference to a secure config file, environment variable, or secure vault (e.g., os.environ['SECRET_KEY']).
-Step 3: If using a config file, ensure it is not committed to version control and has restricted permissions.
-Step 4: Update all code that references the old secret to use the new secure method.
-Step 5: Rotate the secret (generate a new one) if it may have been exposed.
-Step 6: Rebuild and redeploy the application.
-""",
-            'Weak Algorithm': """
-Step 1: Identify where the weak algorithm (e.g., DES, RC4, MD5, SHA1, ECB) is used in the code.
-Step 2: Replace it with a strong algorithm (e.g., AES, GCM, SHA256+).
-Step 3: Update any key sizes, IV handling, or output formats as required by the stronger algorithm.
-Step 4: Test the new implementation for compatibility and correctness.
-Step 5: Remove any legacy/deprecated code.
-""",
-            'Insecure API Usage': """
-Step 1: Find the code using insecure APIs (e.g., ECB mode, static IVs).
-Step 2: Switch to secure modes (CBC, GCM) and ensure IVs are random and unique per encryption.
-Step 3: Refactor the code to use secure cryptographic libraries and best practices.
-Step 4: Add unit tests to verify encryption/decryption security.
-""",
-            'Short Key': """
-Step 1: Locate all cryptographic keys shorter than recommended (e.g., <128 bits for AES).
-Step 2: Generate new, sufficiently long keys (AES: 128/192/256 bits).
-Step 3: Replace all instances of the short key in code, configs, and deployments.
-Step 4: Rotate/expire any data encrypted with the old key if possible.
-Step 5: Document the new key management policy.
-""",
-            'Suspicious Key Material': """
-Step 1: Review the flagged high-entropy or long key material for legitimacy (could be a real key or random data).
-Step 2: If it is a real key, ensure it is securely stored (not hardcoded or exposed in the binary).
-Step 3: Move the key to a secure storage solution (environment variable, vault, encrypted config).
-Step 4: Remove any plaintext or exposed copies from the code/binary.
-Step 5: Rotate the key if it may have been leaked.
-""",
-            'Token': """
-Step 1: Locate the token (JWT, OAuth, API, session, etc.) in the code, config, or memory.
-Step 2: Remove any hardcoded or static tokens from code and configs.
-Step 3: Ensure tokens are generated dynamically and securely at runtime.
-Step 4: Use secure storage and transmission (HTTPS, encrypted storage).
-Step 5: Rotate/expire tokens if they may have been leaked.
-"""
-        }
-        patch_output = "\nPatch Recommendations (by Type):\n"
-        for section, findings in patch_sections.items():
-            if findings:
-                patch_output += f"\n===== {section} =====\n" + patch_steps[section] + "\n"
-        if patch_output.strip() == "Patch Recommendations (by Type):":
-            self.output.append("\nNo patch recommendations found or no issues detected.")
-        else:
-            self.output.append(patch_output)
+        self._findings = vuln_audit.audit(
+            data, self._ctx["sections"], self._ctx["functions"],
+            self._ctx["instructions"], self._ctx["imports"])
+        self._populate()
+
+    def _populate(self):
+        from collections import Counter
+        self.table.setRowCount(0)
+        self.detail.clear()
+        self.xref_list.clear()
+        by_sev = Counter(f.severity for f in self._findings)
+        self.summary.setText(
+            f"{len(self._findings)} findings — "
+            + "  ".join(f"{s}: {by_sev.get(s, 0)}"
+                       for s in ("critical", "high", "medium", "low") if by_sev.get(s)))
+        for f in self._findings:
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            loc = f"{f.section} @ 0x{f.vaddr:x}" if f.vaddr else (f.section or "import")
+            used = (f"{f.xrefs[0].func}@0x{f.xrefs[0].addr:x}"
+                    + (f" +{len(f.xrefs) - 1}" if len(f.xrefs) > 1 else "")) if f.xrefs else ""
+            cells = [f.severity.upper(), f.category, f.value, loc,
+                     f.function or "", used]
+            for c, val in enumerate(cells):
+                item = QTableWidgetItem(val)
+                if c == 0:
+                    item.setForeground(QColor(_SEV_COLOR.get(f.severity, "#c0caf5")))
+                self.table.setItem(r, c, item)
+        self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+
+    def _current(self):
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
+            return None
+        i = rows[0].row()
+        return self._findings[i] if i < len(self._findings) else None
+
+    def _show_detail(self):
+        f = self._current()
+        if f is None:
+            return
+        lines = [f"[{f.severity.upper()}]  {f.category}", "",
+                 f"value:    {f.value}",
+                 f"location: {f.section} @ 0x{f.vaddr:x}  (file offset {f.file_offset})"
+                 if f.vaddr else f"location: {f.section or 'import'}"]
+        if f.function:
+            lines.append(f"function: {f.function} (0x{f.func_addr:x})")
+        lines += ["", f.detail]
+        if f.context:
+            lines += ["", "context:", f.context]
+        self.detail.setPlainText("\n".join(lines))
+        self.xref_list.clear()
+        for x in f.xrefs:
+            it = QListWidgetItem(f"{x.func}  @  0x{x.addr:x}")
+            it.setData(Qt.ItemDataRole.UserRole, x.addr)
+            self.xref_list.addItem(it)
+
+    def _jump_to_finding(self, _item):
+        f = self._current()
+        if f is None:
+            return
+        addr = f.xrefs[0].addr if f.xrefs else f.vaddr
+        if addr:
+            self.navigate_requested.emit(int(addr))
+
+    def _jump_to_xref(self, item):
+        addr = item.data(Qt.ItemDataRole.UserRole)
+        if addr:
+            self.navigate_requested.emit(int(addr))
