@@ -69,12 +69,14 @@ def resolve_endpoints(hosts, limit=25, timeout=3.0):
 
 def format_network_intel(local, resolved):
     lines = ["Network Intelligence", "=" * 30]
-    lines.append("Local machine IP(s): " + (", ".join(local) if local else "unknown"))
+    lines.append("Your machine's local IP(s): " + (", ".join(local) if local else "unknown")
+                 + "   (this is YOUR Mac, via ifconfig)")
+    lines.append("")
     if resolved:
-        lines.append("")
-        lines.append("Server endpoints (resolved hostname -> IP):")
+        lines.append("DNS resolution of hostnames found in the binary "
+                     "(PUBLIC — anyone can get this with `dig`, no app needed):")
         for host, ips in resolved.items():
             lines.append(f"  {host}  ->  {', '.join(ips)}")
     else:
-        lines.append("No server hostnames resolved (offline, or none found).")
+        lines.append("No hostnames resolved (offline, or none found).")
     return "\n".join(lines)

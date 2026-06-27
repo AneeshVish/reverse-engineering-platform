@@ -80,6 +80,15 @@ def _valid_ip(text):
         return False
 
 
+# Characters that mark a C printf/format template or parsing junk rather than a
+# real URL/host: %s %d %@ ** {file_id} [%s] etc.
+_TEMPLATE_RE = re.compile(r"[%*{}<>\[\]\\^`\s]|%[sdulc@]")
+
+
+def _is_template(s):
+    return bool(_TEMPLATE_RE.search(s))
+
+
 def analyze_strings(strings):
     """Detect concrete network indicators in a list of strings."""
     found = []
@@ -94,7 +103,10 @@ def analyze_strings(strings):
 
     for idx, s in enumerate(strings):
         for m in _URL.finditer(s):
-            add(idx, m.group().rstrip(".,);"), 0.95, "URL")
+            u = m.group().rstrip(".,);")
+            if _is_template(u):     # drop printf templates like http://%s, https://**
+                continue
+            add(idx, u, 0.95, "URL")
         for m in _IPV4.finditer(s):
             ip = m.group()
             if ip not in _TRIVIAL_IPS and _valid_ip(ip):
@@ -105,7 +117,9 @@ def analyze_strings(strings):
                 add(idx, cand, 0.75, "IPv6 address")
         for m in _DOMAIN.finditer(s):
             d = m.group()
-            if not _valid_ip(d):
+            # Real network hostnames in binaries are lowercase; mixed-case or
+            # templated matches are parsing junk (e.g. "3.tV", "252Fopen.x.com").
+            if not _valid_ip(d) and d == d.lower() and not _is_template(d):
                 add(idx, d, 0.55, "Domain")
         for m in _STRONG_RE.finditer(s):
             add(idx, m.group(), 0.85, "Network API")

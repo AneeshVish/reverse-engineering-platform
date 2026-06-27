@@ -319,21 +319,28 @@ class FullDecompileWorker(QThread):
             self.result_ready.emit({'code': f"[ERROR] Full decompilation failed: {e}", 'engine': 'None'})
 
 class NetworkResolveWorker(QThread):
-    """Resolve server hostnames -> IPs and gather the local IP, off the UI thread."""
-    done = pyqtSignal(dict, list)   # {host: [ips]}, [local_ips]
+    """Off-thread: local IP, public DNS resolution, and LIVE socket capture."""
+    done = pyqtSignal(dict, list, list)   # {host:[ips]}, [local_ips], [live_conns]
 
-    def __init__(self, hosts):
+    def __init__(self, hosts, app_name=None):
         super().__init__()
         self.hosts = hosts
+        self.app_name = app_name
 
     def run(self):
-        from src.core import network_intel
+        from src.core import network_intel, live_connections
+        local, resolved, live = [], {}, []
         try:
             local = network_intel.local_ips()
             resolved = network_intel.resolve_endpoints(self.hosts, limit=25, timeout=3.0)
-            self.done.emit(resolved, local)
         except Exception:
-            self.done.emit({}, [])
+            pass
+        try:
+            if self.app_name:
+                live = live_connections.live_connections(self.app_name)
+        except Exception:
+            pass
+        self.done.emit(resolved, local, live)
 
 class MainWindow(QMainWindow):
     def compose_analysis_log(self, results):
@@ -1070,23 +1077,36 @@ class MainWindow(QMainWindow):
             # which on minified bundles can include embedded data lists.
             urls = [e.content for e in endpoints if e.category == 'URL']
             hosts = network_intel.hosts_from_urls(urls)
+            # App name for LIVE socket capture: the .app bundle name, else exe name.
+            from src.core import electron as _el
+            app_bundle = (_el.find_enclosing_app(self.current_file_path)
+                          if self.current_file_path else None)
+            if app_bundle:
+                self._app_name = os.path.basename(app_bundle)[:-4]  # strip ".app"
+            elif self.current_file_path:
+                self._app_name = os.path.basename(self.current_file_path)
+            else:
+                self._app_name = None
             self.endpoint_detection_view.append(
-                "\n[Resolving server IPs and local IP in background…]")
-            self._net_worker = NetworkResolveWorker(hosts)
+                "\n[Capturing LIVE connections + resolving DNS in background…]")
+            self._net_worker = NetworkResolveWorker(hosts, app_name=self._app_name)
             self._net_worker.done.connect(self._on_network_resolved)
             self._net_worker.start()
         except Exception as e:
             self.endpoint_detection_view.setPlainText(f"[ERROR] Endpoint detection failed: {e}")
             self._last_endpoint_count = 0
 
-    def _on_network_resolved(self, resolved, local):
-        from src.core import network_intel
-        self.endpoint_detection_view.append(
-            "\n" + network_intel.format_network_intel(local, resolved))
+    def _on_network_resolved(self, resolved, local, live):
+        from src.core import network_intel, live_connections
+        app_name = getattr(self, '_app_name', None) or "the app"
+        # LIVE capture first — this is the real, non-googleable signal.
+        block = ("\n" + "=" * 60 + "\n"
+                 + live_connections.format_live_connections(app_name, live)
+                 + "\n\n" + network_intel.format_network_intel(local, resolved))
+        self.endpoint_detection_view.append(block)
         if hasattr(self, 'insights_panel'):
-            n = len(local) + sum(len(v) for v in resolved.values())
-            self.insights_panel.update_field('endpoints',
-                                              f"{self._last_endpoint_count} ({n} IPs)")
+            self.insights_panel.update_field(
+                'endpoints', f"{self._last_endpoint_count}  ·  {len(live)} live")
 
     def _show_electron_source(self, app, src_dir, nfiles):
         """Show the extracted real JS source in the Source Code tab."""

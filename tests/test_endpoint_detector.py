@@ -61,3 +61,19 @@ def test_weak_apis_low_confidence():
     found = detect_endpoints(b"please connect and accept the terms")
     weak = [e for e in found if e.content in ("connect", "accept")]
     assert all(e.confidence < 0.5 for e in weak)
+
+
+def test_format_string_url_templates_are_filtered():
+    blob = (b"http://%s\x00https://**\x00http://[%s]:%d%s\x00"
+            b"https://api.spotify.com/v1/me\x00{file_id}\x00")
+    urls = {e.content for e in detect_endpoints(blob) if e.category == "URL"}
+    assert "https://api.spotify.com/v1/me" in urls
+    assert not any("%" in u or "*" in u or "{" in u for u in urls)
+
+
+def test_junk_mixedcase_domains_filtered():
+    blob = b"3.tV\x00252Fopen.spotify.com\x00Z-google.golang.org\x00accounts.spotify.com\x00"
+    domains = {e.content for e in detect_endpoints(blob) if e.category == "Domain"}
+    assert "accounts.spotify.com" in domains
+    assert "3.tV" not in domains
+    assert "252Fopen.spotify.com" not in domains   # has uppercase 'F'

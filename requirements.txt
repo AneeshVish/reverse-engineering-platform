@@ -27,3 +27,5 @@ openai>=1.0.0
 
 # Modern UI icons (optional at runtime via src/gui/icons.py fallback)
 qtawesome>=1.2.0
+
+# Live connection capture uses the system `lsof` (preinstalled on macOS/Linux).
