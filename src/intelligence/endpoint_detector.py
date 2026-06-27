@@ -146,11 +146,31 @@ def format_endpoint_results(found: List[NetworkEndpoint], disassembly_lines=None
     groups = {}
     for e in found:
         groups.setdefault(e.category, []).append(e)
-    for cat in sorted(groups):
-        out.append(f"--- {cat} ({len(groups[cat])}) ---")
-        for e in groups[cat][:200]:
+
+    # Reliable signals first (URLs, IPs, real network APIs), then bare domains last.
+    def order(cat):
+        if cat == "URL":
+            return 0
+        if "IP" in cat:
+            return 1
+        if cat.startswith("Network API") and "low" not in cat:
+            return 2
+        if cat == "Domain":
+            return 9
+        return 5
+
+    # Bare domains are demoted and capped — on minified bundles they can include
+    # embedded data lists, so they are the least-reliable signal.
+    cap = {"Domain": 40}
+    for cat in sorted(groups, key=order):
+        items = groups[cat]
+        limit = cap.get(cat, 200)
+        note = ("   (bare domains — may include bundled data; trust URLs/IPs above)"
+                if cat == "Domain" else "")
+        out.append(f"--- {cat} ({len(items)}){note} ---")
+        for e in items[:limit]:
             out.append(f"  {e.content}   (confidence {e.confidence:.2f})")
-        if len(groups[cat]) > 200:
-            out.append(f"  ... and {len(groups[cat]) - 200} more")
+        if len(items) > limit:
+            out.append(f"  ... and {len(items) - limit} more")
         out.append("")
     return "\n".join(out)

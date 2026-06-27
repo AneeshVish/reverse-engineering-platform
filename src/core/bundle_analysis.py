@@ -164,11 +164,17 @@ def resolve_app_executable(app_path):
 
 def is_archive(path):
     low = path.lower()
-    if low.endswith(_ARCHIVE_EXTS):
+    if low.endswith(_ARCHIVE_EXTS) or low.endswith(".asar"):
         return True
     try:
-        return zipfile.is_zipfile(path) or tarfile.is_tarfile(path)
+        if zipfile.is_zipfile(path) or tarfile.is_tarfile(path):
+            return True
     except OSError:
+        return False
+    try:
+        from src.core.asar import is_asar
+        return is_asar(path)
+    except Exception:
         return False
 
 
@@ -184,6 +190,13 @@ def _safe_extract(path, dest):
         return os.path.abspath(target).startswith(dest + os.sep)
 
     try:
+        # Electron asar archives (real JS source).
+        try:
+            from src.core.asar import is_asar, extract_asar
+            if is_asar(path):
+                return extract_asar(path, dest) > 0
+        except Exception:
+            pass
         if zipfile.is_zipfile(path):
             with zipfile.ZipFile(path) as z:
                 for member in z.namelist():

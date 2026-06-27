@@ -34,3 +34,6 @@ graphviz>=0.20.0
 #   - retdec-decompiler          for RetDec decompilation
 #   - ollama                     for local LLM decompilation/summary
 #   - mitmproxy / mitmdump       for network capture
+
+# Beautify minified JS recovered from Electron app.asar (readable source)
+jsbeautifier>=1.14.0

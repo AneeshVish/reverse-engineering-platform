@@ -318,6 +318,23 @@ class FullDecompileWorker(QThread):
         except Exception as e:
             self.result_ready.emit({'code': f"[ERROR] Full decompilation failed: {e}", 'engine': 'None'})
 
+class NetworkResolveWorker(QThread):
+    """Resolve server hostnames -> IPs and gather the local IP, off the UI thread."""
+    done = pyqtSignal(dict, list)   # {host: [ips]}, [local_ips]
+
+    def __init__(self, hosts):
+        super().__init__()
+        self.hosts = hosts
+
+    def run(self):
+        from src.core import network_intel
+        try:
+            local = network_intel.local_ips()
+            resolved = network_intel.resolve_endpoints(self.hosts, limit=25, timeout=3.0)
+            self.done.emit(resolved, local)
+        except Exception:
+            self.done.emit({}, [])
+
 class MainWindow(QMainWindow):
     def compose_analysis_log(self, results):
         """Compose a full analysis log string from the results dict for AI decompilation."""
@@ -936,6 +953,110 @@ class MainWindow(QMainWindow):
         if n < 1024 * 1024:
             return f"{n / 1024:.0f} KB"
         return f"{n / 1024 / 1024:.1f} MB"
+
+    def _run_endpoint_and_network_analysis(self):
+        """Scan strings (and Electron JS source) for endpoints; resolve server IPs.
+
+        For Electron apps (Discord/Slack/VS Code/...) the native file you opened is
+        a stub — the real source is JavaScript in app.asar. We extract it, show it,
+        and scan it for the app's REAL endpoints, then resolve them to server IPs
+        and report the local machine IP.
+        """
+        import glob
+        import tempfile
+        from src.intelligence.endpoint_detector import (
+            detect_endpoints, format_endpoint_results, extract_strings)
+        from src.core import electron, network_intel
+        try:
+            sources = []
+            if self.current_file_path and os.path.isfile(self.current_file_path):
+                with open(self.current_file_path, 'rb') as fh:
+                    sources.extend(extract_strings(fh.read(64 * 1024 * 1024)))
+
+            electron_header = ""
+            app = (electron.find_enclosing_app(self.current_file_path)
+                   if self.current_file_path else None)
+            if app and electron.is_electron_app(app):
+                src_dir = tempfile.mkdtemp(prefix="re_electron_src_")
+                nfiles = electron.extract_source(app, src_dir)
+                self._electron_src_dir = src_dir
+                for f in glob.glob(os.path.join(src_dir, "**", "*"), recursive=True):
+                    if os.path.isfile(f) and f.lower().endswith(
+                            (".js", ".mjs", ".cjs", ".ts", ".json", ".html", ".css")):
+                        try:
+                            with open(f, encoding="utf-8", errors="replace") as fh:
+                                sources.append(fh.read())
+                        except OSError:
+                            pass
+                electron_header = (
+                    f"[ELECTRON APP] {os.path.basename(app)} is a JavaScript (Electron) app.\n"
+                    f"Real source extracted from app.asar: {nfiles} file(s) -> {src_dir}\n"
+                    "Endpoints below include the app's real JS source, not just the native stub.\n\n")
+                self._show_electron_source(app, src_dir, nfiles)
+                if hasattr(self, 'log_view'):
+                    self.log_view.append(
+                        f"[ELECTRON] {os.path.basename(app)}: extracted {nfiles} real "
+                        f"source files to {src_dir}")
+
+            endpoints = detect_endpoints(sources)
+            self._last_endpoint_count = len(endpoints)
+            self.endpoint_detection_view.setPlainText(
+                electron_header + format_endpoint_results(endpoints))
+
+            # Server IPs come from URL hosts (reliable) — not the bare-domain dump,
+            # which on minified bundles can include embedded data lists.
+            urls = [e.content for e in endpoints if e.category == 'URL']
+            hosts = network_intel.hosts_from_urls(urls)
+            self.endpoint_detection_view.append(
+                "\n[Resolving server IPs and local IP in background…]")
+            self._net_worker = NetworkResolveWorker(hosts)
+            self._net_worker.done.connect(self._on_network_resolved)
+            self._net_worker.start()
+        except Exception as e:
+            self.endpoint_detection_view.setPlainText(f"[ERROR] Endpoint detection failed: {e}")
+            self._last_endpoint_count = 0
+
+    def _on_network_resolved(self, resolved, local):
+        from src.core import network_intel
+        self.endpoint_detection_view.append(
+            "\n" + network_intel.format_network_intel(local, resolved))
+        if hasattr(self, 'insights_panel'):
+            n = len(local) + sum(len(v) for v in resolved.values())
+            self.insights_panel.update_field('endpoints',
+                                              f"{self._last_endpoint_count} ({n} IPs)")
+
+    def _show_electron_source(self, app, src_dir, nfiles):
+        """Show the extracted real JS source in the Source Code tab."""
+        import glob
+        files = [f for f in glob.glob(os.path.join(src_dir, "**", "*"), recursive=True)
+                 if os.path.isfile(f)]
+        jsfiles = sorted((f for f in files if f.lower().endswith((".js", ".mjs", ".cjs"))),
+                         key=lambda f: -os.path.getsize(f))
+        header = (f"// ELECTRON APP — REAL JAVASCRIPT SOURCE\n"
+                  f"// {os.path.basename(app)} is an Electron app; this is its ACTUAL source\n"
+                  f"// (extracted from app.asar, not decompiled).\n"
+                  f"// {nfiles} files extracted to: {src_dir}\n//\n// Files:\n")
+        listing = "\n".join(f"//   {os.path.relpath(f, src_dir)}  ({os.path.getsize(f):,} B)"
+                            for f in files)
+        body = ""
+        if jsfiles:
+            main = jsfiles[0]
+            text = ""
+            try:
+                with open(main, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read(600_000)   # inline preview; full file is on disk
+            except OSError:
+                text = ""
+            # Beautify minified JS if jsbeautifier is available (optional).
+            try:
+                import jsbeautifier
+                text = jsbeautifier.beautify(text)
+            except Exception:
+                pass
+            body = (f"\n\n// ===== {os.path.relpath(main, src_dir)} "
+                    f"(largest JS, first 600 KB shown — full file at {src_dir}) =====\n"
+                    + text)
+        self.source_code_view.setPlainText(header + listing + body)
 
     def _update_insights(self, results):
         """Populate the right-dock Insights panel + status bar from results."""
@@ -1700,18 +1821,8 @@ class MainWindow(QMainWindow):
             disasm_lines.append(line)
         self.disassembly_view.setPlainText('\n'.join(disasm_lines))
 
-        # --- Endpoint Detection: scan the binary's actual strings (URLs/IPs/
-        # domains/network-API references), not instruction shapes. ---
-        try:
-            endpoints = []
-            if self.current_file_path and os.path.isfile(self.current_file_path):
-                with open(self.current_file_path, 'rb') as fh:
-                    endpoints = detect_endpoints(fh.read(64 * 1024 * 1024))
-            self.endpoint_detection_view.setPlainText(format_endpoint_results(endpoints))
-            self._last_endpoint_count = len(endpoints)
-        except Exception as e:
-            self.endpoint_detection_view.setPlainText(f"[ERROR] Endpoint detection failed: {e}")
-            self._last_endpoint_count = 0
+        # --- Endpoint Detection + Electron source + Network intelligence ---
+        self._run_endpoint_and_network_analysis()
 
         # Restore detailed log info as before
         if hasattr(self, 'log_view'):
