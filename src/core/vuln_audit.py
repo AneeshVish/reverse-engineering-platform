@@ -20,23 +20,68 @@ from typing import List
 
 # ---- precise detectors (high precision; no substring guessing) -------------
 
-# (label, severity, compiled-bytes-regex, value-group)
+# (label, severity, compiled-bytes-regex, value-group, needs_value_check)
+# Precise formats capture the FULL secret; generic assignments require a quoted
+# string value that passes _looks_like_secret() (kills code-identifier noise like
+# `this.clientSecret` or variable names like `customPassword`).
 SECRET_PATTERNS = [
-    ("Private key block", "critical",
-     re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"), 0),
-    ("AWS access key id", "critical", re.compile(rb"AKIA[0-9A-Z]{16}"), 0),
-    ("Google API key", "high", re.compile(rb"AIza[0-9A-Za-z\-_]{35}"), 0),
-    ("Slack token", "high", re.compile(rb"xox[baprs]-[0-9A-Za-z-]{10,48}"), 0),
-    ("GitHub token", "high", re.compile(rb"gh[pousr]_[0-9A-Za-z]{20,}"), 0),
-    ("Stripe secret key", "critical", re.compile(rb"sk_live_[0-9A-Za-z]{16,}"), 0),
+    # Whole private-key block (header..footer), so the FULL key is shown.
+    ("Private key", "critical",
+     re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----"
+                rb"[\s\S]{1,8192}?"
+                rb"-----END (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----"), 0, False),
+    ("AWS access key id", "critical", re.compile(rb"AKIA[0-9A-Z]{16}"), 0, False),
+    ("AWS secret access key", "critical",
+     re.compile(rb"(?i)aws.{0,20}?[\"']([A-Za-z0-9/+]{40})[\"']"), 1, True),
+    ("Google API key", "high", re.compile(rb"AIza[0-9A-Za-z\-_]{35}"), 0, False),
+    ("Slack token", "high", re.compile(rb"xox[baprs]-[0-9A-Za-z-]{10,48}"), 0, False),
+    ("GitHub token", "high", re.compile(rb"gh[pousr]_[0-9A-Za-z]{20,}"), 0, False),
+    ("Stripe secret key", "critical", re.compile(rb"sk_live_[0-9A-Za-z]{16,}"), 0, False),
+    ("Private key (PEM body)", "critical",
+     re.compile(rb"MII[A-Za-z0-9+/]{200,}={0,2}"), 0, False),
     ("JWT", "high",
-     re.compile(rb"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}"), 0),
+     re.compile(rb"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}"), 0, False),
     ("Hardcoded password", "high",
-     re.compile(rb"(?i)(?:password|passwd|pwd)\s*[:=]\s*[\"']([^\"'\n]{4,48})[\"']"), 1),
+     re.compile(rb"(?i)(?:password|passwd|pwd)\s*[:=]\s*[\"']([^\"'\n]{6,80})[\"']"), 1, True),
     ("Hardcoded API key / secret", "high",
-     re.compile(rb"(?i)(?:api[_-]?key|client[_-]?secret|secret[_-]?key|access[_-]?token)"
-                rb"\s*[:=]\s*[\"']?([A-Za-z0-9\-_./+]{12,})[\"']?"), 1),
+     re.compile(rb"(?i)(?:api[_-]?key|client[_-]?secret|secret[_-]?key|access[_-]?token|"
+                rb"auth[_-]?token|private[_-]?key)\s*[:=]\s*[\"']([A-Za-z0-9\-_+=/]{8,200})[\"']"),
+     1, True),
 ]
+
+# Plain words / placeholders that are NOT real secret values.
+_NOT_SECRETS = {
+    "password", "passwd", "secret", "token", "changeme", "example", "test", "admin",
+    "username", "user", "none", "null", "undefined", "true", "false", "yourpassword",
+    "your_password", "your_api_key", "xxx", "todo", "placeholder", "string", "value",
+    "default", "dummy", "sample", "redacted",
+}
+
+
+def _shannon(s):
+    from collections import Counter
+    import math
+    if not s:
+        return 0.0
+    return -sum((c / len(s)) * math.log2(c / len(s)) for c in Counter(s).values())
+
+
+def _looks_like_secret(v):
+    """True if `v` looks like a real secret VALUE, not a code identifier/word."""
+    if len(v) < 6:
+        return False
+    low = v.lower()
+    if low in _NOT_SECRETS:
+        return False
+    # Code expression (property access / call / whitespace) -> not a literal secret.
+    if any(ch in v for ch in ".()[] \t"):
+        return False
+    # A plain camelCase/identifier word with no digits is almost always a variable
+    # name (clientSecret, customPassword), not a secret.
+    if v.isalpha():
+        return False
+    # Require some randomness or length.
+    return _shannon(v) >= 2.6 or len(v) >= 20
 
 # Dangerous / weak imported functions (matched against the symbol table — exact,
 # so no "des" inside "description" false positives). key -> (severity, why).
@@ -250,15 +295,18 @@ def audit(data, sections, functions, instructions, imports=None):
 
     # 1) Secrets / keys / tokens embedded in the binary, with xrefs to their use.
     seen = set()
-    for label, severity, pat, grp in SECRET_PATTERNS:
+    for label, severity, pat, grp, needs_check in SECRET_PATTERNS:
         for m in pat.finditer(data):
-            raw = m.group(grp) if grp and m.lastindex and m.lastindex >= grp else m.group(0)
+            has_grp = grp and m.lastindex and m.lastindex >= grp
+            raw = m.group(grp) if has_grp else m.group(0)
             try:
                 value = raw.decode("latin-1", "replace")
             except Exception:
                 value = str(raw)
-            offset = m.start(grp) if grp else m.start()
-            key = (label, value, offset)
+            if needs_check and not _looks_like_secret(value):
+                continue
+            offset = m.start(grp) if has_grp else m.start()
+            key = value[:96]   # dedupe by value (precise patterns run first)
             if key in seen:
                 continue
             seen.add(key)
@@ -278,7 +326,7 @@ def audit(data, sections, functions, instructions, imports=None):
             _seen_x = set()
             xrefs = [x for x in xrefs if not (x.addr in _seen_x or _seen_x.add(x.addr))]
             findings.append(Finding(
-                category=label, severity=severity, value=value[:200],
+                category=label, severity=severity, value=value[:8192],
                 file_offset=offset, section=section or "(unmapped)", vaddr=va,
                 function=fname, func_addr=faddr, xrefs=xrefs,
                 context=_hexdump(data, offset),
@@ -312,7 +360,7 @@ def audit_source_text(source_name, text_bytes):
     """
     findings = []
     seen = set()
-    for label, severity, pat, grp in SECRET_PATTERNS:
+    for label, severity, pat, grp, needs_check in SECRET_PATTERNS:
         for m in pat.finditer(text_bytes):
             has_grp = grp and m.lastindex and m.lastindex >= grp
             raw = m.group(grp) if has_grp else m.group(0)
@@ -320,15 +368,18 @@ def audit_source_text(source_name, text_bytes):
                 value = raw.decode("latin-1", "replace")
             except Exception:
                 value = str(raw)
+            if needs_check and not _looks_like_secret(value):
+                continue
             offset = m.start(grp) if has_grp else m.start()
-            key = (label, value, source_name)
+            key = (source_name, value[:96])
             if key in seen:
                 continue
             seen.add(key)
             findings.append(Finding(
-                category=label, severity=severity, value=value[:200],
+                category=label, severity=severity, value=value[:8192],
                 file_offset=offset, section=source_name, vaddr=0,
-                detail=f"Embedded {label.lower()} in source file '{source_name}' at byte {offset}."))
+                detail=f"Embedded {label.lower()} in source file '{source_name}' at byte {offset}.\n\n"
+                       f"Full value:\n{value[:8192]}"))
     return findings
 
 
