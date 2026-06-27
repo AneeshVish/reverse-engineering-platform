@@ -957,6 +957,21 @@ class MainWindow(QMainWindow):
         elif hasattr(self, "log_view"):
             self.log_view.append("[INFO] Open a file first to re-analyze.")
 
+    def _apply_line_spacing(self, edit, pct=145, max_blocks=40000):
+        """Add comfortable line spacing to a code view (skipped on huge listings)."""
+        try:
+            from PyQt6.QtGui import QTextCursor, QTextBlockFormat
+            if edit.document().blockCount() > max_blocks:
+                return
+            cur = edit.textCursor()
+            cur.select(QTextCursor.SelectionType.Document)
+            bf = QTextBlockFormat()
+            bf.setLineHeight(pct, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            cur.mergeBlockFormat(bf)
+            edit.moveCursor(QTextCursor.MoveOperation.Start)
+        except Exception:
+            pass
+
     def _running_workers(self):
         """Collect all QThread workers that might still be running."""
         workers = []
@@ -1868,6 +1883,7 @@ class MainWindow(QMainWindow):
                 line += f" {instr['op_str']}"
             disasm_lines.append(line)
         self.disassembly_view.setPlainText('\n'.join(disasm_lines))
+        self._apply_line_spacing(self.disassembly_view)
 
         # --- Endpoint Detection + Electron source + Network intelligence ---
         self._run_endpoint_and_network_analysis()
