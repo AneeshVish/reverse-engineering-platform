@@ -1,6 +1,7 @@
 """Smoke tests for the universal binary loader / format detection."""
 
 import os
+import sys
 import pytest
 
 from src.core.universal_loader import UniversalLoader, FileType
@@ -20,11 +21,17 @@ def test_missing_file_returns_false():
 
 
 @pytest.mark.skipif(not os.path.exists("/bin/ls"), reason="no /bin/ls on this OS")
-def test_macho_detected():
-    """Regression: /bin/ls (fat Mach-O) must not fall back to RAW."""
+def test_system_binary_detected():
+    """Regression: a real system binary must be detected, not fall back to RAW.
+
+    /bin/ls is a (fat) Mach-O on macOS and an ELF on Linux — assert the right
+    format for the platform so this passes on macOS and Linux CI alike.
+    """
     ldr = UniversalLoader()
     assert ldr.load("/bin/ls") is True
-    assert ldr.file_type == FileType.MACHO
+    expected = FileType.MACHO if sys.platform == "darwin" else FileType.ELF
+    assert ldr.file_type == expected
+    assert ldr.file_type != FileType.RAW
     assert ldr.parsed is not None
 
 
