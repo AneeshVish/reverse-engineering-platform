@@ -40,6 +40,20 @@ def test_reveal_empty_file(tmp_path):
     assert "EMPTY" in AdvancedUnpacker().reveal_contents(str(p))
 
 
+def test_reveal_chromium_pak(tmp_path):
+    import struct
+    # Minimal Chromium .pak v5 with one text resource (high-level format, not encryption).
+    payload = b"hello world resource"
+    header = struct.pack("<I", 5) + bytes([1, 0, 0, 0]) + struct.pack("<HH", 1, 0)
+    entries = (struct.pack("<H", 100) + struct.pack("<I", 24) +
+               struct.pack("<H", 0) + struct.pack("<I", 24 + len(payload)))
+    p = tmp_path / "resources.pak"
+    p.write_bytes(header + entries + payload)
+    out = AdvancedUnpacker().reveal_contents(str(p))
+    assert "CHROMIUM RESOURCE PACK v5" in out
+    assert "hello world resource" in out   # real extracted resource, not a hash
+
+
 def test_no_method_named_run_qiling():
     # The old panel crashed calling a method that never existed. Guard the rename:
     # reveal_contents IS the supported entry point now.

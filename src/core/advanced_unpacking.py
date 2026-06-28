@@ -244,6 +244,15 @@ class AdvancedUnpacker:
             except Exception as e:
                 out.append(f"\n[ZIP] {e}")
 
+        # 3b) Chromium .pak resource pack — extract the real embedded resources.
+        pak = self._parse_chromium_pak(data)
+        if pak is not None:
+            out.append(f"\n[CHROMIUM RESOURCE PACK v{pak['version']} — "
+                       f"{pak['count']} resources, {pak['aliases']} aliases, "
+                       f"encoding={pak['encoding']}]")
+            out.extend(pak["lines"])
+            revealed_structured = True
+
         # 4) Native binary — real sections (LIEF) + linked libraries.
         secs = self._binary_sections(file_path)
         if secs:
@@ -347,6 +356,80 @@ class AdvancedUnpacker:
         except Exception:
             pass
         return "\n".join(out)
+
+    @staticmethod
+    def _parse_chromium_pak(data):
+        """Parse a Chromium .pak resource pack (v4/v5) and inventory its resources.
+
+        A .pak is NOT encrypted — it's a documented container. High entropy comes
+        from the PNG images and compressed UI resources inside it. This extracts
+        the real resource table: id, type (PNG with dimensions / text / binary),
+        size, and a text preview for string resources.
+        """
+        import struct
+        if len(data) < 12:
+            return None
+        version = struct.unpack_from("<I", data, 0)[0]
+        if version == 5:
+            encoding = data[4]
+            count = struct.unpack_from("<H", data, 8)[0]
+            aliases = struct.unpack_from("<H", data, 10)[0]
+            pos = 12
+        elif version == 4:
+            count = struct.unpack_from("<I", data, 4)[0]
+            encoding = data[8]
+            aliases = 0
+            pos = 9
+        else:
+            return None
+        # Sanity: resource count must fit the file with 6-byte entries.
+        if count <= 0 or count > 200000 or pos + (count + 1) * 6 > len(data):
+            return None
+        entries = []
+        for _ in range(count + 1):
+            rid = struct.unpack_from("<H", data, pos)[0]
+            off = struct.unpack_from("<I", data, pos + 2)[0]
+            entries.append((rid, off))
+            pos += 6
+        enc = {0: "binary", 1: "UTF8", 2: "UTF16"}.get(encoding, str(encoding))
+
+        kinds = {"PNG": 0, "GIF": 0, "JPEG": 0, "text": 0, "binary": 0}
+        lines, shown = [], 0
+        for i in range(count):
+            rid, start = entries[i]
+            end = entries[i + 1][1]
+            if end <= start or end > len(data):
+                continue
+            blob = data[start:end]
+            size = len(blob)
+            if blob[:8] == b"\x89PNG\r\n\x1a\n":
+                kinds["PNG"] += 1
+                w = struct.unpack_from(">I", blob, 16)[0] if size >= 24 else 0
+                h = struct.unpack_from(">I", blob, 20)[0] if size >= 24 else 0
+                desc = f"PNG image {w}x{h}"
+            elif blob[:3] == b"\xff\xd8\xff":
+                kinds["JPEG"] += 1
+                desc = "JPEG image"
+            elif blob[:4] in (b"GIF8",):
+                kinds["GIF"] += 1
+                desc = "GIF image"
+            elif blob and sum(32 <= c <= 126 or c in (9, 10, 13)
+                              for c in blob[:200]) / min(len(blob), 200) > 0.9:
+                kinds["text"] += 1
+                preview = blob[:80].decode("utf-8", "replace").replace("\n", " ")
+                desc = f"text: {preview!r}"
+            else:
+                kinds["binary"] += 1
+                desc = "binary resource"
+            if shown < 40:
+                lines.append(f"  id {rid:>6}: {desc}  ({size:,} bytes)")
+                shown += 1
+        summary = "  Breakdown: " + ", ".join(f"{k}={v}" for k, v in kinds.items() if v)
+        head = [summary,
+                f"  (showing {min(shown, 40)} of {count} resources — "
+                f"high entropy here is PNG/compressed data, NOT encryption)"]
+        return {"version": version, "count": count, "aliases": aliases,
+                "encoding": enc, "lines": head + lines}
 
     @staticmethod
     def _binary_sections(file_path):
