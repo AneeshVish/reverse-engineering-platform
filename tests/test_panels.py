@@ -42,6 +42,7 @@ PANEL_IMPORTS = [
     ("src.gui.network_capture_panel", "NetworkCapturePanel"),
     ("src.gui.privesc_panel", "PrivescPanel"),
     ("src.gui.threat_lab_panel", "ThreatLabPanel"),
+    ("src.gui.runtime_crypto_panel", "RuntimeCryptoPanel"),
     ("src.gui.advanced_viewer", "AdvancedVisualizationWidget"),
     ("src.gui.advanced_viewer", "AIAnalysisPanel"),
     ("src.gui.advanced_viewer", "MemoryMapWidget"),

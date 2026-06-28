@@ -1420,6 +1420,13 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to load Threat Lab panel: {e}")
 
+        try:
+            from src.gui.runtime_crypto_panel import RuntimeCryptoPanel
+            self.runtime_crypto_panel = RuntimeCryptoPanel()
+            add_tab(self.runtime_crypto_panel, "Runtime Crypto", "fa5s.unlock-alt")
+        except Exception as e:
+            self.log_view.append(f"[ERROR] Failed to load Runtime Crypto panel: {e}")
+
         self.project_analysis_tab = ProjectAnalysisTab()
         add_tab(self.project_analysis_tab, "Project Analysis", "fa5s.folder-tree")
 
