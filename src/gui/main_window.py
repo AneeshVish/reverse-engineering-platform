@@ -1406,6 +1406,20 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to load Network Capture panel: {e}")
 
+        try:
+            from src.gui.privesc_panel import PrivescPanel
+            self.privesc_panel = PrivescPanel()
+            add_tab(self.privesc_panel, "Privesc Surface", "fa5s.user-shield")
+        except Exception as e:
+            self.log_view.append(f"[ERROR] Failed to load Privesc panel: {e}")
+
+        try:
+            from src.gui.threat_lab_panel import ThreatLabPanel
+            self.threat_lab_panel = ThreatLabPanel()
+            add_tab(self.threat_lab_panel, "Threats", "fa5s.biohazard")
+        except Exception as e:
+            self.log_view.append(f"[ERROR] Failed to load Threat Lab panel: {e}")
+
         self.project_analysis_tab = ProjectAnalysisTab()
         add_tab(self.project_analysis_tab, "Project Analysis", "fa5s.folder-tree")
 
@@ -1942,6 +1956,10 @@ class MainWindow(QMainWindow):
                               if getattr(self, 'program_model', None) else []),
                 imports=results.get('imports', []),
                 source_dir=getattr(self, '_electron_src_dir', None))
+
+        # Point the Privesc-surface panel at the loaded binary.
+        if hasattr(self, 'privesc_panel'):
+            self.privesc_panel.set_target(self.current_file_path)
 
         # Feed the Visualization tab (entropy map + basic-block CFG) from real data.
         try:
