@@ -83,10 +83,13 @@ class FullSoftwarePanel(QWidget):
             out.append(self.adv_unpacker.reveal_contents(abs_path))
         except Exception as e:
             out.append(f'[REVEAL] [ERROR] {e}')
-        # Packer/protection (real PE/entropy heuristic).
+        # Packer/protection — only meaningful for PE files; suppress the noise
+        # ("Not a PE file." / "PEiD detection failed") on Mach-O/ELF/resources.
         try:
             packer = self.adv_unpacker.detect_packer(abs_path)
-            if packer and packer not in ('Not a PE file.',):
+            noise = (not packer or packer.startswith(('Not a PE file', 'PEiD detection failed',
+                                                      'pefile not installed')))
+            if not noise:
                 out.append(f'\n[PACKER]\n{packer.strip()}')
         except Exception:
             pass

@@ -253,6 +253,14 @@ class AdvancedUnpacker:
             out.extend(pak["lines"])
             revealed_structured = True
 
+        # 3c) Code-signing / certificate artifacts (CodeResources, .provisionprofile,
+        # .cer, PKCS#7). NOT encrypted — certificates + signatures + file hashes.
+        sig = self._parse_signing(data, os.path.basename(file_path))
+        if sig is not None:
+            out.append("\n[CODE-SIGNING / CERTIFICATE ARTIFACT — not encrypted]")
+            out.extend(sig)
+            revealed_structured = True
+
         # 4) Native binary — real sections (LIEF) + linked libraries.
         secs = self._binary_sections(file_path)
         if secs:
@@ -269,9 +277,10 @@ class AdvancedUnpacker:
         ent = self.entropy_analysis(file_path)
         out.append(f"\n[ENTROPY] {ent:.2f} / 8.0")
         if ent > 7.5 and not revealed_structured:
-            out.append("Note: near-maximal entropy with no decodable structure means this is "
-                        "genuinely compressed or encrypted. Without the key it cannot be "
-                        "recovered — and one-way hashes (SHA-256, etc.) never can be, by anyone.")
+            out.append("Note: high entropy here just means the bytes are dense — usually "
+                        "compressed data, an image, or a certificate/signature, NOT encryption. "
+                        "If it were truly encrypted, it could only be recovered with the key; "
+                        "and one-way hashes (SHA-256) can never be reversed, by anyone.")
         return "\n".join(out)
 
     @staticmethod
@@ -430,6 +439,85 @@ class AdvancedUnpacker:
                 f"high entropy here is PNG/compressed data, NOT encryption)"]
         return {"version": version, "count": count, "aliases": aliases,
                 "encoding": enc, "lines": head + lines}
+
+    @staticmethod
+    def _cert_summary(cert):
+        from cryptography import x509
+        def _name(n, oid):
+            try:
+                v = n.get_attributes_for_oid(oid)
+                return v[0].value if v else ""
+            except Exception:
+                return ""
+        cn = _name(cert.subject, x509.NameOID.COMMON_NAME)
+        org = _name(cert.subject, x509.NameOID.ORGANIZATION_NAME)
+        issuer = _name(cert.issuer, x509.NameOID.COMMON_NAME) or \
+            _name(cert.issuer, x509.NameOID.ORGANIZATION_NAME)
+        try:
+            until = cert.not_valid_after_utc.date().isoformat()
+        except AttributeError:
+            until = cert.not_valid_after.date().isoformat()
+        who = cn or org or "?"
+        if org and org not in who:
+            who += f" ({org})"
+        return f"    • Certificate: {who}  — issued by {issuer or '?'}, valid until {until}"
+
+    @staticmethod
+    def _parse_signing(data, name=""):
+        """Parse a code-signing / certificate artifact into readable form, or None.
+
+        Handles PKCS#7/CMS signed containers (provisioning profiles), bare DER
+        certificates, and Apple code-signing files. These contain certs + a
+        signature + file hashes — none of it encrypted, so we show the real
+        identities and any embedded plist rather than random-looking bytes.
+        """
+        import re
+        lname = name.lower()
+        is_der = data[:1] == b"\x30" and data[1:2] in (b"\x81", b"\x82", b"\x83")
+        by_name = lname.endswith((".provisionprofile", ".mobileprovision", ".cer",
+                                  ".der", ".p7b", ".p7s")) or lname == "coderesources"
+        if not (is_der or by_name):
+            return None
+
+        out = ["  These bytes are a signature + certificate chain (+ file hashes), NOT "
+               "encryption. A signature proves authenticity; it has no hidden plaintext "
+               "to recover. The real identities and any embedded profile are below."]
+
+        certs = []
+        try:
+            from cryptography.hazmat.primitives.serialization import pkcs7
+            certs = list(pkcs7.load_der_pkcs7_certificates(data) or [])
+        except Exception:
+            pass
+        if not certs:
+            try:
+                from cryptography import x509
+                certs = [x509.load_der_x509_certificate(data)]
+            except Exception:
+                pass
+        if certs:
+            out.append(f"  Signing certificate chain ({len(certs)}):")
+            for c in certs[:10]:
+                try:
+                    out.append(AdvancedUnpacker._cert_summary(c))
+                except Exception:
+                    pass
+
+        # Provisioning profiles wrap an XML plist payload — extract and decode it.
+        m = re.search(rb"<\?xml.*?</plist>", data, re.S)
+        if m:
+            try:
+                import plistlib
+                pl = plistlib.loads(m.group(0))
+                # Drop the bulky raw DeveloperCertificates blobs from the view.
+                if isinstance(pl, dict):
+                    pl = {k: ("<%d cert(s)>" % len(v) if k == "DeveloperCertificates"
+                              and isinstance(v, list) else v) for k, v in pl.items()}
+                out.append("\n  Embedded profile (decoded):")
+                out.extend("  " + ln for ln in AdvancedUnpacker._dump_structured(pl))
+            except Exception:
+                pass
+        return out
 
     @staticmethod
     def _binary_sections(file_path):

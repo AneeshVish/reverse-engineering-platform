@@ -40,6 +40,24 @@ def test_reveal_empty_file(tmp_path):
     assert "EMPTY" in AdvancedUnpacker().reveal_contents(str(p))
 
 
+def test_signing_artifact_explains_and_decodes_profile(tmp_path):
+    # A provisioning-profile-style file: XML plist payload (no real DER signature).
+    payload = (b'<?xml version="1.0"?><plist version="1.0"><dict>'
+               b'<key>AppIDName</key><string>Claude for Desktop</string>'
+               b'<key>TeamName</key><string>Anthropic PBC</string></dict></plist>')
+    p = tmp_path / "embedded.provisionprofile"
+    p.write_bytes(b"\x30\x82\x01\x00" + payload)  # fake DER prefix + payload
+    out = AdvancedUnpacker().reveal_contents(str(p))
+    assert "CODE-SIGNING / CERTIFICATE ARTIFACT" in out
+    assert "NOT encryption" in out or "not encrypted" in out.lower()
+    assert "Claude for Desktop" in out        # embedded profile decoded
+    assert "Anthropic PBC" in out
+
+
+def test_plain_text_is_not_a_signing_artifact():
+    assert AdvancedUnpacker._parse_signing(b"just some text", "notes.txt") is None
+
+
 def test_reveal_chromium_pak(tmp_path):
     import struct
     # Minimal Chromium .pak v5 with one text resource (high-level format, not encryption).

@@ -17,9 +17,9 @@ import time
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
 from src.core import pii_classify, tracker_list, traffic_capture as tc
@@ -54,6 +54,7 @@ class NetworkCapturePanel(QWidget):
         self._port = tc.DEFAULT_PORT
         self._all_secrets = []
         self._target = ""
+        self._system_service = None   # set while system-wide capture is active
         self._static_hosts = []
         self._proof_cache = {}
         self._proof_worker = None
@@ -88,6 +89,13 @@ class NetworkCapturePanel(QWidget):
         browse.clicked.connect(self._browse)
         row.addWidget(browse)
         layout.addLayout(row)
+
+        # System-wide mode: capture EVERY app via the system proxy + trusted CA
+        # (how Charles/Proxyman work). Catches already-running apps; needs admin once.
+        self.system_cb = QCheckBox(
+            "Capture ALL apps system-wide (admin once; reverts on Stop; "
+            "pinned apps still won't decrypt)")
+        layout.addWidget(self.system_cb)
 
         # One adaptive primary action + small Stop + secondary test.
         row2 = QHBoxLayout()
@@ -172,6 +180,12 @@ class NetworkCapturePanel(QWidget):
         """One-click entry: arm on `path` and begin capturing immediately."""
         if path:
             self.set_target(path)
+        # System-wide capture changes system settings + asks for admin — never do
+        # that automatically; require an explicit Start click.
+        if self.system_cb.isChecked():
+            self.status.setText("System-wide mode selected — click Start Capture to "
+                                "enable it (asks for admin once).")
+            return
         if not self._preflight():
             return
         base = self._target_base()
@@ -194,6 +208,9 @@ class NetworkCapturePanel(QWidget):
 
     def _on_primary(self):
         if not self._preflight():
+            return
+        if self.system_cb.isChecked():
+            self._begin(launch=False)   # system-wide: no per-app launch
             return
         base = self._target_base()
         if base and tc.app_running(base):
@@ -238,6 +255,22 @@ class NetworkCapturePanel(QWidget):
         self._timer.start(700)
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+
+        # System-wide mode: trust CA + set system proxy (one admin prompt). Captures
+        # every non-pinned app, including ones already running — no relaunch.
+        if self.system_cb.isChecked():
+            self.status.setText("Requesting admin to enable system-wide capture…")
+            ok, service, out = tc.enable_system_capture(self._port)
+            if not ok:
+                self.status.setText("System-wide capture not enabled "
+                                    f"(admin declined / failed). {out[:120]}")
+                self.stop_capture()
+                return
+            self._system_service = service
+            self.status.setText(f"Capturing ALL apps on {service} (proxy hidden). "
+                                "Use any app to generate traffic.")
+            return
+
         if launch and (self.target_edit.text().strip() or self._target):
             target = self.target_edit.text().strip() or self._target
             self.status.setText("Launching app through the interceptor…")
@@ -263,6 +296,13 @@ class NetworkCapturePanel(QWidget):
 
     def stop_capture(self):
         self._timer.stop()
+        # Revert the system proxy first so networking is always restored.
+        if self._system_service:
+            try:
+                tc.disable_system_capture(self._system_service)
+            except Exception:
+                pass
+            self._system_service = None
         for proc in (self._app_proc, self._proxy_proc):
             try:
                 if proc and proc.poll() is None:

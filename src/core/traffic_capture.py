@@ -102,6 +102,66 @@ def app_running(name):
         return False
 
 
+def primary_network_service():
+    """The macOS network service (e.g. 'Wi-Fi') backing the default route."""
+    try:
+        out = subprocess.run(["route", "-n", "get", "default"],
+                             capture_output=True, text=True, timeout=5).stdout
+        iface = ""
+        for ln in out.splitlines():
+            if "interface:" in ln:
+                iface = ln.split(":", 1)[1].strip()
+        hp = subprocess.run(["networksetup", "-listallhardwareports"],
+                            capture_output=True, text=True, timeout=5).stdout
+        for block in hp.split("\n\n"):
+            if f"Device: {iface}" in block:
+                for ln in block.splitlines():
+                    if ln.startswith("Hardware Port:"):
+                        return ln.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return "Wi-Fi"
+
+
+def _admin_run(cmds, prompt="Reverse-engineering platform wants to set up traffic capture"):
+    """Run privileged shell commands via one native admin prompt. (ok, output)."""
+    joined = " ; ".join(cmds)
+    script = (f'do shell script "{joined.replace(chr(34), chr(92) + chr(34))}" '
+              f'with prompt "{prompt}" with administrator privileges')
+    try:
+        r = subprocess.run(["osascript", "-e", script],
+                           capture_output=True, text=True, timeout=120)
+        return r.returncode == 0, (r.stdout + r.stderr)
+    except Exception as e:
+        return False, str(e)
+
+
+def enable_system_capture(port, service=None, ca=MITM_CA):
+    """Trust the CA + point the system proxy at us — captures ALL non-pinned apps.
+
+    One admin prompt. Returns (ok, service, output). Reverse with
+    disable_system_capture(service).
+    """
+    service = service or primary_network_service()
+    ok, out = _admin_run([
+        f"security add-trusted-cert -d -r trustRoot "
+        f"-k /Library/Keychains/System.keychain '{ca}'",
+        f"networksetup -setwebproxy '{service}' 127.0.0.1 {port}",
+        f"networksetup -setsecurewebproxy '{service}' 127.0.0.1 {port}",
+    ])
+    return ok, service, out
+
+
+def disable_system_capture(service):
+    """Revert the system proxy (the CA stays trusted for next time). (ok, output)."""
+    if not service:
+        return True, ""
+    return _admin_run([
+        f"networksetup -setwebproxystate '{service}' off",
+        f"networksetup -setsecurewebproxystate '{service}' off",
+    ], prompt="Reverse-engineering platform wants to stop traffic capture")
+
+
 def resolve_launch_target(path):
     """A .app bundle -> its inner executable; otherwise the path itself."""
     if path and path.rstrip("/").endswith(".app") and os.path.isdir(path):
