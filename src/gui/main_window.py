@@ -1125,6 +1125,18 @@ class MainWindow(QMainWindow):
             # which on minified bundles can include embedded data lists.
             urls = [e.content for e in endpoints if e.category == 'URL']
             hosts = network_intel.hosts_from_urls(urls)
+
+            # Claim 4 evidence: flag known third-party trackers among the endpoints,
+            # and hand the static host set to the live-capture panel for static↔live
+            # correlation (a host found here AND seen live is proof it's really used).
+            try:
+                from src.core import tracker_list
+                self._static_hosts = hosts
+                self.endpoint_detection_view.append("\n\n" + tracker_list.summarize(hosts))
+                if hasattr(self, 'network_capture_panel'):
+                    self.network_capture_panel.set_static_hosts(hosts)
+            except Exception:
+                pass
             # App name for LIVE socket capture: the .app bundle name, else exe name.
             from src.core import electron as _el
             app_bundle = (_el.find_enclosing_app(self.current_file_path)
@@ -1430,8 +1442,28 @@ class MainWindow(QMainWindow):
         self.project_analysis_tab = ProjectAnalysisTab()
         add_tab(self.project_analysis_tab, "Project Analysis", "fa5s.folder-tree")
 
+        # Auto-start live capture when the user opens the Network Capture tab with an
+        # app armed — no manual start/stop, no ports. (Launching the app is the only
+        # outward action; for an already-running app the panel asks before relaunch.)
+        self.analysis_tabs.currentChanged.connect(self._on_center_tab_changed)
+
         layout.addWidget(self.analysis_tabs)
         return center_widget
+
+    def _on_center_tab_changed(self, index):
+        try:
+            ncp = getattr(self, "network_capture_panel", None)
+            if ncp is None:
+                return
+            if self.analysis_tabs.widget(index) is ncp:
+                # Arm from the loaded file if not already set, then auto-start.
+                if not ncp.target_edit.text().strip() and getattr(self, "current_file_path", None):
+                    ncp.set_target(self.current_file_path)
+                if ncp._proxy_proc is None and ncp.target_edit.text().strip():
+                    ncp.auto_start()
+        except Exception as e:
+            if hasattr(self, "log_view"):
+                self.log_view.append(f"[WARN] auto-capture: {e}")
 
     def on_model_changed(self):
         """Handle AI model selection change from the combo box (Ollama only)."""

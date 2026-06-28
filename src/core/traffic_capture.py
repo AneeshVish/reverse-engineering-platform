@@ -9,10 +9,47 @@ ignore the env proxy won't be captured this way (honest limitation).
 
 import os
 import shutil
+import socket
 import subprocess
 import sys
 
 MITM_CA = os.path.expanduser("~/.mitmproxy/mitmproxy-ca-cert.pem")
+
+# Single, fixed capture port — never surfaced to the user. If it's busy we quietly
+# fall back to an OS-assigned free port (still hidden).
+DEFAULT_PORT = 8080
+
+
+def pick_port(preferred=DEFAULT_PORT):
+    """Return `preferred` if free, else an OS-assigned free port. Never raises."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", preferred))
+            return preferred
+    except OSError:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                return s.getsockname()[1]
+        except OSError:
+            return preferred
+
+
+def quit_app(name):
+    """Best-effort quit a running app so we can relaunch it under the proxy."""
+    if not name:
+        return
+    if sys.platform == "darwin":
+        try:
+            subprocess.run(["osascript", "-e", f'quit app "{name}"'],
+                           capture_output=True, timeout=8)
+        except Exception:
+            pass
+    try:
+        subprocess.run(["pkill", "-i", "-f", name], capture_output=True, timeout=5)
+    except Exception:
+        pass
 
 
 def mitmdump_path():
