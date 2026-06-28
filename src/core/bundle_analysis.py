@@ -71,7 +71,29 @@ def analyze_binary_file(path):
 
     summary["sha256"] = hashlib.sha256(data).hexdigest()
     summary["entropy"] = round(shannon_entropy(data[:65536]), 3)
-    summary["secret_hits"] = len(_SECRET_RE.findall(data))
+    # Precise, real secrets (full values + offsets) — NOT a keyword counter.
+    # This is what makes whole-app analysis trustworthy: code-signing SHA-256
+    # hashes and the word "password" no longer count as secrets.
+    try:
+        from src.core import vuln_audit
+        secs = vuln_audit.audit_source_text(os.path.basename(path), data)
+        summary["secrets"] = [{"category": s.category, "severity": s.severity,
+                               "value": s.value[:400], "offset": s.file_offset}
+                              for s in secs]
+    except Exception:
+        summary["secrets"] = []
+    summary["secret_hits"] = len(summary["secrets"])
+
+    # Decode base64/hex blobs that hide readable text (config/URLs/JSON). Only on
+    # text-ish files — binaries are full of byte runs that decode to garbage.
+    head = data[:4096]
+    if head and sum(32 <= c <= 126 or c in (9, 10, 13) for c in head) / len(head) > 0.90:
+        try:
+            summary["decoded"] = decode_blobs(data)
+        except Exception:
+            summary["decoded"] = []
+    else:
+        summary["decoded"] = []
 
     loader = UniversalLoader()
     try:
@@ -111,6 +133,56 @@ def analyze_binary_file(path):
     return summary
 
 
+_B64_RE = re.compile(rb"[A-Za-z0-9+/]{24,}={0,2}")
+_HEX_RE = re.compile(rb"(?:[0-9a-fA-F]{2}){12,}")
+
+
+def decode_blobs(data, limit=12):
+    """Decode base64/hex blobs that hide readable TEXT (not random hashes/keys).
+
+    SHA-256 / encryption decode to random bytes and are skipped; base64/hex that
+    wraps real strings (URLs, JSON, config) is revealed. Returns [(kind, snippet,
+    decoded_text)].
+    """
+    import base64
+
+    def _printable(b):
+        return b and sum(32 <= c <= 126 for c in b) / len(b) > 0.85 and \
+            any(chr(c).isalpha() for c in b)
+
+    out, seen = [], set()
+    for m in _B64_RE.finditer(data):
+        blob = m.group()
+        if blob in seen or len(blob) % 4:
+            continue
+        seen.add(blob)
+        try:
+            dec = base64.b64decode(blob, validate=True)
+        except Exception:
+            continue
+        if len(dec) >= 10 and _printable(dec) and b" " in dec or (
+                len(dec) >= 16 and _printable(dec)):
+            out.append(("base64", blob[:48].decode("latin-1"),
+                        dec.decode("latin-1", "replace")[:200]))
+        if len(out) >= limit:
+            return out
+    for m in _HEX_RE.finditer(data):
+        blob = m.group()
+        if blob in seen or len(blob) % 2:
+            continue
+        seen.add(blob)
+        try:
+            dec = bytes.fromhex(blob.decode())
+        except Exception:
+            continue
+        if len(dec) >= 8 and _printable(dec):
+            out.append(("hex", blob[:48].decode("latin-1"),
+                        dec.decode("latin-1", "replace")[:200]))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def render_summary(summary):
     """Human-readable text block for one file's summary."""
     lines = [f"File: {summary.get('path', '')}", f"  Kind: {summary.get('kind', '?')}"]
@@ -125,8 +197,23 @@ def render_summary(summary):
     if "entropy" in summary:
         flag = "  ⚠ likely packed/encrypted" if summary.get("packed") else ""
         lines.append(f"  Entropy: {summary['entropy']}{flag}")
-    if summary.get("secret_hits"):
-        lines.append(f"  Possible embedded secrets: {summary['secret_hits']} hit(s)")
+    secrets = summary.get("secrets", [])
+    if secrets:
+        lines.append(f"  HARDCODED SECRETS ({len(secrets)}):")
+        for s in secrets[:40]:
+            val = s.get("value", "")
+            val = (val[:200] + "…") if len(val) > 200 else val
+            lines.append(f"    [{s.get('severity', '').upper()}] {s.get('category', '')} "
+                         f"@ byte {s.get('offset', 0)}:")
+            lines.append(f"        {val}")
+        if len(secrets) > 40:
+            lines.append(f"    … and {len(secrets) - 40} more.")
+    decoded = summary.get("decoded", [])
+    if decoded:
+        lines.append(f"  DECODED BLOBS ({len(decoded)}) — hidden text revealed:")
+        for kind, snippet, text in decoded[:10]:
+            lines.append(f"    [{kind}] {snippet}…")
+            lines.append(f"        → {text}")
     if "error" in summary:
         lines.append(f"  Note: {summary['error']}")
     return "\n".join(lines)
@@ -254,24 +341,38 @@ def analyze_application(root, max_depth=2, _depth=0, _prefix=""):
     return results
 
 
+_SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def collect_secrets(results):
+    """Flatten every REAL secret across the bundle: [(rel_path, secret_dict)]."""
+    out = []
+    for rel, f in results.items():
+        if isinstance(f, dict):
+            for s in f.get("secrets", []):
+                out.append((rel, s))
+    out.sort(key=lambda t: _SEV_RANK.get(t[1].get("severity", "low"), 9))
+    return out
+
+
 def summarize_bundle(results):
     """Aggregate a top-level report over a {rel_path: summary} mapping."""
     files = [v for v in results.values() if isinstance(v, dict)]
     binaries = [f for f in files if f.get("is_binary")]
     total_functions = sum(f.get("functions", 0) for f in binaries)
-    total_secrets = sum(f.get("secret_hits", 0) for f in files)
     packed = [f for f in binaries if f.get("packed")]
     protected = [f for f in binaries if f.get("protection_level") == "heavy"]
     by_type = Counter(f.get("type", "?") for f in binaries)
     protector_names = sorted({p for f in binaries for p in f.get("protections", [])})
+    secrets = collect_secrets(results)
+    files_with_secrets = sum(1 for f in files if f.get("secrets"))
 
     lines = [
         "===== APPLICATION ANALYSIS SUMMARY =====",
         f"Total files analyzed: {len(files)}",
         f"Binaries: {len(binaries)}  ({dict(by_type)})",
         f"Total functions discovered: {total_functions}",
-        f"Files with possible secrets: {sum(1 for f in files if f.get('secret_hits'))} "
-        f"({total_secrets} hits)",
+        f"REAL hardcoded secrets: {len(secrets)} across {files_with_secrets} file(s)",
         f"Likely packed/encrypted binaries: {len(packed)}",
     ]
     if protector_names:
@@ -281,4 +382,19 @@ def summarize_bundle(results):
                      + ", ".join(os.path.basename(f["path"]) for f in protected[:10]))
     if packed:
         lines.append("  Packed: " + ", ".join(os.path.basename(f["path"]) for f in packed[:10]))
+    if secrets:
+        lines.append("")
+        lines.append("===== HARDCODED SECRETS (actual values) =====")
+        for rel, s in secrets[:50]:
+            val = s.get("value", "")
+            val = (val[:80] + "…") if len(val) > 80 else val
+            lines.append(f"  [{s.get('severity', '').upper()}] {s.get('category', '')}: "
+                         f"{val}")
+            lines.append(f"        in {rel}  (byte {s.get('offset', 0)})")
+        if len(secrets) > 50:
+            lines.append(f"  … and {len(secrets) - 50} more (select files on the left).")
+    else:
+        lines.append("")
+        lines.append("No hardcoded secrets found (code-signing SHA-256 hashes and the "
+                     "word \"password\" are correctly NOT counted as secrets).")
     return "\n".join(lines)

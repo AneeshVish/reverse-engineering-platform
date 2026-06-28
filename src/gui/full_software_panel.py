@@ -38,98 +38,13 @@ class FolderAnalysisWorker(QThread):
         self.analysis_complete.emit(result_tree)
 
 class FullSoftwarePanel(QWidget):
-    def advanced_unpack_selected(self):
-        if not self.last_selected_path:
-            self.viewer.setPlainText('[ERROR] No file selected for advanced unpacking.')
-            return
-        abs_path = os.path.join(getattr(self.analysis_worker, 'folder_path', ''), self.last_selected_path)
-        if not os.path.isfile(abs_path):
-            self.viewer.setPlainText('[ERROR] Selected item is not a file.')
-            return
-        results = []
-        # 1. DIE packer detection
-        try:
-            packer_info = self.adv_unpacker.detect_packer(abs_path)
-            results.append(f'[PACKER INFO]\n{packer_info.strip() if packer_info else "None"}')
-        except Exception as e:
-            results.append(f'[PACKER INFO]\n[ERROR] {e}')
-        # 2. Entropy analysis
-        try:
-            entropy = self.adv_unpacker.entropy_analysis(abs_path)
-            results.append(f'[ENTROPY] {entropy:.2f}')
-        except Exception as e:
-            results.append(f'[ENTROPY]\n[ERROR] {e}')
-        # 3. Static anti-debug patching (stub)
-        try:
-            patched = self.adv_unpacker.static_patch_antidebug(abs_path)
-            results.append(f'[STATIC PATCH ANTI-DEBUG]\n{patched}')
-        except Exception as e:
-            results.append(f'[STATIC PATCH ANTI-DEBUG]\n[ERROR] {e}')
-        # 4. Frida dynamic instrumentation (stub)
-        try:
-            frida_result = self.adv_unpacker.run_frida_script(abs_path, "// stub script")
-            results.append(f'[FRIDA DYNAMIC INSTRUMENTATION]\n{frida_result}')
-        except Exception as e:
-            results.append(f'[FRIDA DYNAMIC INSTRUMENTATION]\n[ERROR] {e}')
-        # 5. Qiling emulation (stub)
-        try:
-            qiling_result = self.adv_unpacker.run_qiling(abs_path)
-            results.append(f'[QILING EMULATION]\n{qiling_result}')
-        except Exception as e:
-            results.append(f'[QILING EMULATION]\n[ERROR] {e}')
-        # 6. angr symbolic execution (stub)
-        try:
-            angr_result = self.adv_unpacker.angr_symbolic_exec(abs_path)
-            results.append(f'[ANGR SYMBOLIC EXECUTION]\n{angr_result}')
-        except Exception as e:
-            results.append(f'[ANGR SYMBOLIC EXECUTION]\n[ERROR] {e}')
-        # 7. Brute-force XOR decryption
-        try:
-            with open(abs_path, 'rb') as f:
-                data = f.read()
-            xor_results = self.adv_unpacker.brute_force_xor(data)
-            if xor_results:
-                import tempfile  # os is imported at module level
-                xor_sections = []
-                for r in xor_results:
-                    section = f"Key {r['key']}: Format: {r['format']} | Language: {r['high_level']}\nSnippet:\n{r['snippet']}"
-                    # If looks like PE/ELF/EXE, try Ghidra on decrypted blob
-                    if r['format'] in ('PE/EXE', 'ELF'):
-                        try:
-                            with tempfile.NamedTemporaryFile(delete=False, suffix='.bin') as tf:
-                                tf.write(bytes([b ^ r['key'] for b in data]))
-                                tf.flush()
-                                ghidra_result = self.decompiler_manager._run_ghidra(tf.name)
-                            if ghidra_result and not ghidra_result.lower().startswith('ghidra error'):
-                                section += f"\n[Ghidra Decompiled C]\n{ghidra_result.strip()}"
-                            else:
-                                section += f"\n[Ghidra Decompiled C]\n[ERROR] {ghidra_result}"
-                            os.unlink(tf.name)
-                        except Exception as e:
-                            section += f"\n[Ghidra Decompiled C]\n[ERROR] {e}"
-                    xor_sections.append(section + f"\n{'-'*40}")
-                xor_str = '\n'.join(xor_sections)
-                results.append(f'[BRUTE-FORCE XOR]\n{xor_str}')
-            else:
-                results.append(f'[BRUTE-FORCE XOR]\nNo XOR-encrypted code found.')
-        except Exception as e:
-            results.append(f'[BRUTE-FORCE XOR]\n[ERROR] {e}')
-        # 8. Runtime dump (stub)
-        try:
-            dump_result = self.adv_unpacker.dump_sections_after_runtime(abs_path)
-            results.append(f'[RUNTIME MEMORY DUMP]\n{dump_result}')
-        except Exception as e:
-            results.append(f'[RUNTIME MEMORY DUMP]\n[ERROR] {e}')
-        # Show all results
-        self.viewer.setPlainText('\n\n'.join(str(r) for r in results))
-
     def __init__(self):
         super().__init__()
         self.layout = QVBoxLayout(self)
         self.folder_btn = QPushButton("Select Folder for Full Software Analysis")
         self.folder_btn.clicked.connect(self.select_folder)
         self.layout.addWidget(self.folder_btn)
-        self.adv_unpack_btn = QPushButton("Advanced Unpack/Bypass Selected File")
+        self.adv_unpack_btn = QPushButton("Reveal Contents of Selected File")
         self.adv_unpack_btn.clicked.connect(self.advanced_unpack_selected)
         self.layout.addWidget(self.adv_unpack_btn)
         self.progress = QProgressBar()
@@ -149,70 +64,45 @@ class FullSoftwarePanel(QWidget):
         self.last_selected_path = None
 
     def advanced_unpack_selected(self):
+        """Reveal the ACTUAL recoverable contents of the selected file.
+
+        Honest extraction: decodes property lists, decompresses gzip/zlib/bz2/xz,
+        lists zip/binary sections, extracts strings, and decodes base64/hex blobs.
+        It does NOT pretend to "decrypt" one-way hashes — nothing can.
+        """
         if not self.last_selected_path:
-            self.viewer.setPlainText('[ERROR] No file selected for advanced unpacking.')
+            self.viewer.setPlainText('[ERROR] No file selected.')
             return
-        abs_path = os.path.join(getattr(self.analysis_worker, 'folder_path', ''), self.last_selected_path)
+        abs_path = os.path.join(getattr(self.analysis_worker, 'folder_path', ''),
+                                self.last_selected_path)
         if not os.path.isfile(abs_path):
             self.viewer.setPlainText('[ERROR] Selected item is not a file.')
             return
-        results = []
-        # 1. DIE packer detection
+        out = []
         try:
-            packer_info = self.adv_unpacker.detect_packer(abs_path)
-            results.append(f'[PACKER INFO]\n{packer_info.strip() if packer_info else "None"}')
+            out.append(self.adv_unpacker.reveal_contents(abs_path))
         except Exception as e:
-            results.append(f'[PACKER INFO]\n[ERROR] {e}')
-        # 2. Entropy analysis
+            out.append(f'[REVEAL] [ERROR] {e}')
+        # Packer/protection (real PE/entropy heuristic).
         try:
-            entropy = self.adv_unpacker.entropy_analysis(abs_path)
-            results.append(f'[ENTROPY] {entropy:.2f}')
-        except Exception as e:
-            results.append(f'[ENTROPY]\n[ERROR] {e}')
-        # 3. Static anti-debug patching (stub)
-        try:
-            patched = self.adv_unpacker.static_patch_antidebug(abs_path)
-            results.append(f'[STATIC PATCH ANTI-DEBUG]\n{patched}')
-        except Exception as e:
-            results.append(f'[STATIC PATCH ANTI-DEBUG]\n[ERROR] {e}')
-        # 4. Frida dynamic instrumentation (stub)
-        try:
-            frida_result = self.adv_unpacker.run_frida_script(abs_path, "// stub script")
-            results.append(f'[FRIDA DYNAMIC INSTRUMENTATION]\n{frida_result}')
-        except Exception as e:
-            results.append(f'[FRIDA DYNAMIC INSTRUMENTATION]\n[ERROR] {e}')
-        # 5. Qiling emulation (stub)
-        try:
-            qiling_result = self.adv_unpacker.run_qiling(abs_path)
-            results.append(f'[QILING EMULATION]\n{qiling_result}')
-        except Exception as e:
-            results.append(f'[QILING EMULATION]\n[ERROR] {e}')
-        # 6. angr symbolic execution (stub)
-        try:
-            angr_result = self.adv_unpacker.angr_symbolic_exec(abs_path)
-            results.append(f'[ANGR SYMBOLIC EXECUTION]\n{angr_result}')
-        except Exception as e:
-            results.append(f'[ANGR SYMBOLIC EXECUTION]\n[ERROR] {e}')
-        # 7. Brute-force XOR decryption
+            packer = self.adv_unpacker.detect_packer(abs_path)
+            if packer and packer not in ('Not a PE file.',):
+                out.append(f'\n[PACKER]\n{packer.strip()}')
+        except Exception:
+            pass
+        # XOR brute-force only matters if it actually finds an embedded format.
         try:
             with open(abs_path, 'rb') as f:
-                data = f.read()
-            xor_results = self.adv_unpacker.brute_force_xor(data)
-            if xor_results:
-                xor_str = '\n'.join([f'Key {key}: {decrypted[:32].hex()}...' for key, decrypted in xor_results[:5]])
-                results.append(f'[BRUTE-FORCE XOR]\n{xor_str}')
-            else:
-                results.append(f'[BRUTE-FORCE XOR]\nNo XOR-encrypted MZ/PE found.')
-        except Exception as e:
-            results.append(f'[BRUTE-FORCE XOR]\n[ERROR] {e}')
-        # 8. Runtime dump (stub)
-        try:
-            dump_result = self.adv_unpacker.dump_sections_after_runtime(abs_path)
-            results.append(f'[RUNTIME MEMORY DUMP]\n{dump_result}')
-        except Exception as e:
-            results.append(f'[RUNTIME MEMORY DUMP]\n[ERROR] {e}')
-        # Show all results
-        self.viewer.setPlainText('\n\n'.join(str(r) for r in results))
+                data = f.read(2 * 1024 * 1024)
+            xor = self.adv_unpacker.brute_force_xor(data)
+            real = [r for r in xor if r.get('format') not in (None, 'ASCII text?')]
+            if real:
+                lines = [f"  key=0x{r['key']:02x}: {r['format']} ({r['high_level']})"
+                         for r in real[:10]]
+                out.append('\n[XOR-DECRYPTED EMBEDDED CODE]\n' + '\n'.join(lines))
+        except Exception:
+            pass
+        self.viewer.setPlainText('\n'.join(out))
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Software Folder")
