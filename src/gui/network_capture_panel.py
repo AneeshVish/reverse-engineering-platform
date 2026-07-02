@@ -57,7 +57,7 @@ class NetworkCapturePanel(QWidget):
         self._system_service = None   # set while system-wide capture is active
         self._static_hosts = []
         self._proof_cache = {}
-        self._proof_worker = None
+        self._proof_workers = []
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tail)
         self._build_ui()
@@ -214,11 +214,41 @@ class NetworkCapturePanel(QWidget):
             return
         base = self._target_base()
         if base and tc.app_running(base):
-            self.status.setText(f"Quitting {base} and relaunching through the interceptor…")
+            # Single-instance apps hand a relaunch off to the running instance and
+            # exit, so a fixed-delay relaunch captures nothing. Quit, then POLL until
+            # the process is really gone before cold-starting under the interceptor.
+            self.status.setText(f"Quitting {base} completely (waiting for it to exit)…")
             tc.quit_app(base)
-            QTimer.singleShot(1200, lambda: self._begin(launch=True))
+            self._quit_wait_tries = 0
+            self._quit_timer = QTimer(self)
+            self._quit_timer.timeout.connect(lambda: self._await_exit_then_begin(base))
+            self._quit_timer.start(400)
         else:
             self._begin(launch=True)
+
+    def _await_exit_then_begin(self, base):
+        """Poll (off the paint path) until `base` has fully exited, then cold-start."""
+        self._quit_wait_tries = getattr(self, "_quit_wait_tries", 0) + 1
+        if not tc.app_running(base):
+            self._quit_timer.stop()
+            self.status.setText(f"{base} exited — cold-starting it through the interceptor…")
+            self._begin(launch=True)
+        elif self._quit_wait_tries >= 20:   # ~8s
+            self._quit_timer.stop()
+            tc.quit_app(base)   # one more, harder nudge
+            self.status.setText(
+                f"{base} is still running after quit — it may be single-instance or "
+                "protected. Trying anyway; if the table stays empty, quit it manually "
+                "and click Start again, or use system-wide capture.")
+            self._begin(launch=True)
+
+    @staticmethod
+    def _likely_pinned(base):
+        """Known apps whose core API traffic is certificate-pinned (won't decrypt via proxy)."""
+        b = (base or "").lower()
+        return any(p in b for p in (
+            "claude", "spotify", "whatsapp", "signal", "telegram", "dropbox",
+            "1password", "slack"))
 
     def _target_base(self):
         t = (self.target_edit.text() or self._target).strip()
@@ -267,8 +297,21 @@ class NetworkCapturePanel(QWidget):
                 self.stop_capture()
                 return
             self._system_service = service
-            self.status.setText(f"Capturing ALL apps on {service} (proxy hidden). "
-                                "Use any app to generate traffic.")
+            if not tc.ca_trusted():
+                # Proxy is set, but the CA isn't trusted -> clients show "not secure"
+                # and capture nothing. Tell the user exactly how to fix it.
+                self.status.setText("⚠ Capturing, but the CA is NOT trusted yet — apps will "
+                                    "show 'not secure' and won't decrypt. See the fix below.")
+                self.output_hint(
+                    "The interception CA isn't trusted by macOS, so HTTPS shows 'not secure' "
+                    "and nothing decrypts. Trust it once with:\n\n"
+                    "  sudo security add-trusted-cert -d -r trustRoot \\\n"
+                    "    -k /Library/Keychains/System.keychain "
+                    "~/.mitmproxy/mitmproxy-ca-cert.pem\n\n"
+                    "Then fully restart the target app and capture again.")
+            else:
+                self.status.setText(f"Capturing ALL apps on {service} (proxy hidden, CA "
+                                    "trusted). Use any app to generate traffic.")
             return
 
         if launch and (self.target_edit.text().strip() or self._target):
@@ -283,6 +326,20 @@ class NetworkCapturePanel(QWidget):
         base = os.path.basename(target.rstrip("/"))
         if self._app_proc is None:
             self.status.setText(f"Couldn't launch '{base}'. Use Test, or pick an app/CLI binary.")
+        elif self._likely_pinned(base):
+            # Be honest up front: for pinned apps the env-var proxy decrypts only
+            # unpinned traffic (often just telemetry), not the core API.
+            self.status.setText(
+                f"Launched {base}. Note: it certificate-pins its core API, so the "
+                "network proxy will only decrypt unpinned traffic (e.g. telemetry). "
+                "Full decryption needs in-process instrumentation (Runtime Crypto).")
+            self.output_hint(
+                f"{base} pins its main API connection. A network interceptor (this panel, "
+                "Charles, Proxyman, Burp) CANNOT decrypt a pinned connection — only the "
+                "app's own process can read that plaintext.\n\n"
+                "What you WILL see here: any unpinned traffic (telemetry/updates), plus the "
+                "Static↔Live correlation and live socket owners.\n"
+                "What captures the core API: the Runtime Crypto tab (in-process TLS hooks).")
         else:
             self.status.setText(f"Capturing {base}…  (use the app to generate traffic)")
 
@@ -311,10 +368,23 @@ class NetworkCapturePanel(QWidget):
                 pass
         self._app_proc = None
         self._proxy_proc = None
+        # Wait out any in-flight ownership-proof threads so Qt doesn't abort on exit.
+        for w in list(self._proof_workers):
+            try:
+                if w.isRunning():
+                    w.wait(2000)
+            except Exception:
+                pass
+        self._proof_workers = []
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._refresh_primary()
         self.status.setText(f"Stopped — {len(self.flows)} call(s) captured.")
+
+    def output_hint(self, text):
+        """Surface a help/diagnostic message in the detail pane."""
+        self.req_view.setPlainText(text)
+        self.detail.setCurrentWidget(self.req_view)
 
     def _reset(self):
         self.flows = []
@@ -424,9 +494,15 @@ class NetworkCapturePanel(QWidget):
             self.proof_view.setPlainText(self._proof_cache[host])
         elif host:
             self.proof_view.setPlainText(f"Fetching ownership proof for {host}…")
-            self._proof_worker = _ProofWorker(host)
-            self._proof_worker.done.connect(self._on_proof)
-            self._proof_worker.start()
+            worker = _ProofWorker(host)
+            worker.done.connect(self._on_proof)
+            # Keep a reference so the QThread isn't garbage-collected mid-run (which
+            # aborts Qt with "QThread: Destroyed while thread is still running").
+            self._proof_workers.append(worker)
+            worker.finished.connect(
+                lambda w=worker: self._proof_workers.remove(w)
+                if w in self._proof_workers else None)
+            worker.start()
 
         secs = rec.get("secrets", [])
         self.flow_secrets.setPlainText(

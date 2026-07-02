@@ -115,7 +115,11 @@ class AdvancedUnpacker:
         import binascii
         import io
         results = []
-        for key in range(256):
+        # key=0x00 is the identity transform (b ^ 0 == b): it doesn't "decrypt"
+        # anything, it just re-detects the host file's OWN format. Reporting it as
+        # "XOR-DECRYPTED" is false — skip it so we only surface a genuine hidden
+        # payload revealed by a real, non-trivial XOR key.
+        for key in range(1, 256):
             decrypted = bytes([b ^ key for b in data])
             detected = None
             code_snippet = None
@@ -198,6 +202,15 @@ class AdvancedUnpacker:
             return "[EMPTY FILE] 0 bytes — nothing to reveal."
 
         out = [f"REVEALED CONTENTS — {os.path.basename(file_path)} ({len(data):,} bytes)"]
+        # Lead with an honest protection verdict: encrypted vs. merely
+        # compressed/signed/hashed/obfuscated. This prevents the classic mistake
+        # of trying to "decrypt" something that was never encrypted.
+        try:
+            from src.core import protection_verdict as pv
+            out.append("")
+            out.append(pv.verdict_for_bytes(data, os.path.basename(file_path)).render())
+        except Exception:
+            pass
         magic = data[:16]
         revealed_structured = False
 

@@ -19,6 +19,32 @@ MITM_CA = os.path.expanduser("~/.mitmproxy/mitmproxy-ca-cert.pem")
 # fall back to an OS-assigned free port (still hidden).
 DEFAULT_PORT = 8080
 
+# Hosts to PASS THROUGH untouched (TLS not intercepted). These pin their certs and
+# BREAK when MITM'd — OS services, software updaters, push. Passing them through
+# keeps apps and the OS working; we simply don't decrypt them (we couldn't anyway).
+PASSTHROUGH_HOSTS = [
+    r"(^|\.)push\.apple\.com",
+    r"(^|\.)ocsp\.apple\.com",
+    r"(^|\.)ocsp2?\.apple\.com",
+    r"(^|\.)gateway\.icloud\.com",
+    r"(^|\.)gs-loc\.apple\.com",
+    r"(^|\.)mesu\.apple\.com",
+    r"(^|\.)mzstatic\.com",
+    r"(^|\.)gdmf\.apple\.com",
+    r"(^|\.)updates\.discord\.com",
+    r"(^|\.)dl\.discordapp\.net",
+    r"(^|\.)update\.googleapis\.com",
+    # Discord pins its API/gateway — interception only breaks it, never decrypts.
+    # Pass it through so the app keeps working instead of failing to load.
+    r"(^|\.)discord\.com",
+    r"(^|\.)discordapp\.com",
+    r"(^|\.)discordapp\.net",
+    r"(^|\.)gateway\.discord\.gg",
+    # WhatsApp: pinned transport + E2E content — uncapturable; don't break it.
+    r"(^|\.)whatsapp\.net",
+    r"(^|\.)whatsapp\.com",
+]
+
 
 def pick_port(preferred=DEFAULT_PORT):
     """Return `preferred` if free, else an OS-assigned free port. Never raises."""
@@ -68,6 +94,24 @@ def ca_exists():
     return os.path.isfile(MITM_CA)
 
 
+def ca_trusted():
+    """True if the mitmproxy CA is present in the System keychain (i.e. trusted).
+
+    When this is False, intercepted HTTPS shows 'not secure' and clients refuse the
+    connection — so capture yields nothing. Used to warn the user up front.
+    """
+    if sys.platform != "darwin" or not ca_exists():
+        return False
+    try:
+        r = subprocess.run(
+            ["security", "find-certificate", "-c", "mitmproxy",
+             "/Library/Keychains/System.keychain"],
+            capture_output=True, text=True, timeout=8)
+        return r.returncode == 0 and "mitmproxy" in (r.stdout + r.stderr).lower()
+    except Exception:
+        return False
+
+
 def addon_path():
     from src.utils.paths import script_path
     return script_path("mitm_capture_addon")
@@ -100,6 +144,23 @@ def app_running(name):
         return bool(r.stdout.strip())
     except Exception:
         return False
+
+
+def wait_until_stopped(name, timeout=8.0, interval=0.4):
+    """Block until no process matching `name` is running, or timeout. Returns True if stopped.
+
+    Single-instance apps (Electron: Claude/Slack/VS Code) hand a relaunch off to the
+    already-running instance and exit — so the process we start is NOT the one making
+    the API calls, and capture stays empty. Cold-starting requires the old instance
+    to fully die first; this polls for that instead of guessing with a fixed sleep.
+    """
+    import time as _time
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        if not app_running(name):
+            return True
+        _time.sleep(interval)
+    return not app_running(name)
 
 
 def primary_network_service():
@@ -175,18 +236,24 @@ def resolve_launch_target(path):
     return path
 
 
-def start_proxy(port, capture_file):
-    """Start mitmdump with the capture addon. Returns the Popen or None."""
+def start_proxy(port, capture_file, ignore_hosts=None):
+    """Start mitmdump with the capture addon. Returns the Popen or None.
+
+    `ignore_hosts` adds extra host regexes to pass through untouched (on top of
+    PASSTHROUGH_HOSTS) — pinned endpoints that would otherwise break the app.
+    """
     md = mitmdump_path()
     if not md:
         return None
     env = os.environ.copy()
     env["RE_CAPTURE_FILE"] = capture_file
     open(capture_file, "w", encoding="utf-8").close()   # truncate
+    cmd = [md, "-p", str(port), "-q", "--set", "onboarding=false", "-s", addon_path()]
+    hosts = list(PASSTHROUGH_HOSTS) + list(ignore_hosts or [])
+    if hosts:
+        cmd += ["--ignore-hosts", "(" + "|".join(hosts) + ")"]
     return subprocess.Popen(
-        [md, "-p", str(port), "-q", "--set", "onboarding=false",
-         "-s", addon_path()],
-        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def launch_app(target, port, ca=MITM_CA):

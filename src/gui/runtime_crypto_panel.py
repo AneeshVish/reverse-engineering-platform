@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from src.core import resign
 from src.core import runtime_crypto as rc
 
 
@@ -35,6 +36,19 @@ class _StartWorker(QThread):
             self.fail.emit(str(e))
 
 
+class _ResignWorker(QThread):
+    """Copy + re-sign a .app so Frida can attach. codesign/ditto are slow-ish
+    and must not run on the UI thread."""
+    done = pyqtSignal(dict)
+
+    def __init__(self, app_path):
+        super().__init__()
+        self.app_path = app_path
+
+    def run(self):
+        self.done.emit(resign.prepare_instrumentable_copy(self.app_path))
+
+
 class RuntimeCryptoPanel(QWidget):
     _event = pyqtSignal(dict)
 
@@ -47,16 +61,21 @@ class RuntimeCryptoPanel(QWidget):
         layout.addWidget(title)
 
         note = QLabel(
-            "Reads key / IV / plaintext at the endpoint by hooking the TARGET's own "
-            "crypto calls (CommonCrypto / OpenSSL / BoringSSL) with Frida. It does not "
-            "break AES or reverse SHA — it reads what the app itself decrypts. Use only "
-            "on a process you spawn, own, or are authorized to analyze on this machine.")
+            "Reads key / IV / plaintext AND full HTTPS request/response bodies at the "
+            "endpoint by hooking the TARGET's own crypto + TLS calls (CommonCrypto / "
+            "OpenSSL / BoringSSL, incl. SSL_write / SSL_read) with Frida. It does not "
+            "break AES, reverse SHA, or defeat TLS — it reads what the app itself "
+            "encrypts/decrypts. For Electron apps (Claude/Slack), use Spawn & Hook: it "
+            "cold-starts the app and follows child processes so the TLS hooks land in "
+            "the process that makes the API calls. Use only on software you own or are "
+            "authorized to analyze on this machine.")
         note.setWordWrap(True)
         note.setObjectName("Hint")
         layout.addWidget(note)
 
         self._cap = None
         self._worker = None
+        self._resign_worker = None
         self._event.connect(self._append_event)
 
         row = QHBoxLayout()
@@ -67,6 +86,20 @@ class RuntimeCryptoPanel(QWidget):
         row.addWidget(self.target_edit, 1)
         row.addWidget(self.browse_btn)
         layout.addLayout(row)
+
+        # Hardened macOS apps (Electron: Claude/Slack/…) refuse a debugger/Frida
+        # attach unless they carry get-task-allow. This prepares an instrumentable
+        # COPY (original untouched) and points the target at it. Frida stays a
+        # separate runtime source; this is just its prerequisite on macOS.
+        prep_row = QHBoxLayout()
+        self.resign_btn = QPushButton("Prepare macOS .app for instrumentation (re-sign a copy)")
+        self.resign_btn.clicked.connect(self._prepare_app)
+        prep_row.addWidget(self.resign_btn)
+        prep_row.addStretch()
+        layout.addLayout(prep_row)
+        if not resign.available():
+            self.resign_btn.setEnabled(False)
+            self.resign_btn.setToolTip("Needs macOS with codesign/ditto (Xcode Command Line Tools).")
 
         btn_row = QHBoxLayout()
         self.spawn_btn = QPushButton("Spawn & Hook")
@@ -102,6 +135,34 @@ class RuntimeCryptoPanel(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Select a program to spawn")
         if path:
             self.target_edit.setText(path)
+
+    def _prepare_app(self):
+        app_path, _ = QFileDialog.getOpenFileName(
+            self, "Select a macOS .app to make instrumentable", "/Applications",
+            "Applications (*.app);;All files (*)")
+        if not app_path:
+            return
+        if not resign.is_app_bundle(app_path):
+            self.output.append(f"[ERROR] Not a .app bundle: {app_path}")
+            return
+        self.resign_btn.setEnabled(False)
+        self.output.append(
+            f"\nPreparing an instrumentable copy of {app_path} …\n"
+            "(copying the bundle and re-signing it with get-task-allow — this can "
+            "take a few seconds for large apps)")
+        self._resign_worker = _ResignWorker(app_path)
+        self._resign_worker.done.connect(self._on_resigned)
+        self._resign_worker.start()
+
+    def _on_resigned(self, res):
+        self.resign_btn.setEnabled(resign.available())
+        if res.get("ok"):
+            self.output.append(f"[OK] {res['message']}")
+            # Point the target at the instrumentable copy's executable (spawn), or
+            # the copy bundle if the exe couldn't be resolved.
+            self.target_edit.setText(res.get("exe_path") or res.get("copy_path") or "")
+        else:
+            self.output.append(f"[ERROR] {res.get('message', 'unknown error')}")
 
     def _start(self, mode):
         target = self.target_edit.text().strip()

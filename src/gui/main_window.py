@@ -1118,6 +1118,7 @@ class MainWindow(QMainWindow):
 
             endpoints = detect_endpoints(sources)
             self._last_endpoint_count = len(endpoints)
+            self._last_endpoints = endpoints   # kept for evidence-ranking once live data lands
             self.endpoint_detection_view.setPlainText(
                 electron_header + format_endpoint_results(endpoints))
 
@@ -1159,14 +1160,47 @@ class MainWindow(QMainWindow):
     def _on_network_resolved(self, resolved, local, live):
         from src.core import network_intel, live_connections
         app_name = getattr(self, '_app_name', None) or "the app"
-        # LIVE capture first — this is the real, non-googleable signal.
+
+        # Evidence-based ranking: fold the LIVE socket signal + DNS resolution into
+        # the static endpoints so the view leads with what the app ACTUALLY uses and
+        # collapses the library/namespace/PKI noise (Task 1). Live IPs/PTR hosts come
+        # from the socket table; resolved is the DNS map for the static hosts.
+        live_ips, live_hosts = [], []
+        for c in (live or []):
+            raddr = c.get("raddr", "")
+            ip = raddr.rsplit(":", 1)[0] if raddr else ""
+            if ip:
+                live_ips.append(ip)
+            if c.get("rdns"):
+                live_hosts.append(c["rdns"])
+        try:
+            from src.core import endpoint_rank
+            ranked = endpoint_rank.rank(
+                getattr(self, "_last_endpoints", []) or [],
+                live_hosts=live_hosts, live_ips=live_ips, resolved=resolved)
+            counts = endpoint_rank.summarize_counts(ranked)
+            self._last_real_endpoint_count = sum(
+                counts.get(t, 0) for t in ("confirmed-live", "live-only", "real-server"))
+            ranked_block = (endpoint_rank.format_ranked(ranked)
+                            + "\n\n" + "=" * 60 + "\n"
+                            + "RAW DETECTION + RESOLUTION DETAIL (below)\n")
+            # Lead with the ranked intelligence, keep the raw detail beneath it.
+            prior = self.endpoint_detection_view.toPlainText()
+            self.endpoint_detection_view.setPlainText(ranked_block + "\n" + prior)
+        except Exception as e:
+            self._last_real_endpoint_count = 0
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[WARN] Endpoint ranking failed: {e}")
+
+        # LIVE capture detail — the real, non-googleable signal.
         block = ("\n" + "=" * 60 + "\n"
                  + live_connections.format_live_connections(app_name, live)
                  + "\n\n" + network_intel.format_network_intel(local, resolved))
         self.endpoint_detection_view.append(block)
         if hasattr(self, 'insights_panel'):
+            real = getattr(self, '_last_real_endpoint_count', 0)
             self.insights_panel.update_field(
-                'endpoints', f"{self._last_endpoint_count}  ·  {len(live)} live")
+                'endpoints', f"{real} real / {self._last_endpoint_count} found  ·  {len(live)} live")
 
     def _show_electron_source(self, app, src_dir, nfiles):
         """Show the extracted real JS source in the Source Code tab."""
