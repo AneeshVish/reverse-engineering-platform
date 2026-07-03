@@ -236,6 +236,53 @@ def resolve_launch_target(path):
     return path
 
 
+def _bundle_root(path):
+    """Given a .app path OR an executable inside one, return the .app root (or '')."""
+    if not path:
+        return ""
+    p = path.rstrip("/")
+    if p.endswith(".app") and os.path.isdir(p):
+        return p
+    marker = ".app/Contents/MacOS/"
+    i = p.find(marker)
+    if i >= 0:
+        return p[:i + 4]   # include ".app"
+    return ""
+
+
+def is_electron_app(path):
+    """True if `path` (a .app or its inner exe) is an Electron/Chromium app.
+
+    Detected by the presence of the Electron Framework in the bundle. Chromium's
+    network service — which handles the app's real API traffic — ignores the
+    HTTP_PROXY env var, so these apps need Chromium proxy SWITCHES instead.
+    """
+    root = _bundle_root(path)
+    if not root:
+        return False
+    fw = os.path.join(root, "Contents", "Frameworks", "Electron Framework.framework")
+    return os.path.isdir(fw)
+
+
+def chromium_capture_args(port):
+    """Chromium command-line switches that route the app's network service through
+    our proxy and make it accept the interception CA.
+
+    - --proxy-server: Chromium (unlike Node) only honors an explicit proxy switch
+      or the system proxy, never HTTP_PROXY. This is why the chat traffic slipped
+      past the env-var proxy entirely.
+    - --ignore-certificate-errors: accept the mitmproxy cert, defeating
+      verifier-level cert pinning (app-level pinning in JS/native still won't
+      decrypt — that's the Frida/Runtime-Crypto case).
+
+    Chromium bypasses loopback by default, so local IPC is undisturbed.
+    """
+    return [
+        f"--proxy-server=http://127.0.0.1:{port}",
+        "--ignore-certificate-errors",
+    ]
+
+
 def start_proxy(port, capture_file, ignore_hosts=None):
     """Start mitmdump with the capture addon. Returns the Popen or None.
 
@@ -257,11 +304,19 @@ def start_proxy(port, capture_file, ignore_hosts=None):
 
 
 def launch_app(target, port, ca=MITM_CA):
-    """Launch the target app/binary wired through the capture proxy. Popen or None."""
+    """Launch the target app/binary wired through the capture proxy. Popen or None.
+
+    For Electron/Chromium apps we ALSO pass Chromium proxy + cert switches so the
+    network service (which ignores HTTP_PROXY) routes through us — otherwise only
+    the Node/undici traffic is captured and the chat/renderer traffic slips past.
+    """
     exe = resolve_launch_target(target)
     if not exe or not os.path.exists(exe):
         return None
-    return subprocess.Popen([exe], env=capture_env(port, ca),
+    argv = [exe]
+    if is_electron_app(target) or is_electron_app(exe):
+        argv += chromium_capture_args(port)
+    return subprocess.Popen(argv, env=capture_env(port, ca),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

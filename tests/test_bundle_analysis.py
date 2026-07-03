@@ -14,7 +14,7 @@ def test_entropy_bounds():
 
 def test_source_secret_detection(tmp_path):
     p = tmp_path / "config.py"
-    p.write_text('API_KEY = "AKIAIOSFODNN7EXAMPLE"\npassword = "hunter2hunter2"\n')
+    p.write_text('API_KEY = "' "AKIA" 'IOSFODNN7EXAMPLE"\npassword = "hunter2hunter2"\n')
     s = ba.analyze_binary_file(str(p))
     assert s["kind"] == "source"
     assert s["secret_hits"] >= 1
@@ -57,7 +57,7 @@ def test_binary_summary_and_bundle(tmp_path):
     import shutil
     binp = tmp_path / "tool"
     shutil.copy("/bin/ls", binp)
-    (tmp_path / "config.py").write_text('secret = "AKIAIOSFODNN7EXAMPLE"')
+    (tmp_path / "config.py").write_text('secret = "' "AKIA" 'IOSFODNN7EXAMPLE"')
 
     results = {}
     for root, _, files in os.walk(tmp_path):

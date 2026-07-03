@@ -43,7 +43,171 @@ class _ProofWorker(QThread):
         self.done.emit(self.host, text)
 
 
+class ServerEvidenceView(QWidget):
+    """Prove a discovered server is REAL by showing the actual user traffic to it.
+
+    A bare host/IP proves nothing — anyone can resolve a name or ping a box. What
+    proves the server is genuinely used by the app is the concrete request/response
+    traffic observed from THIS machine: the methods, paths, bodies, and secrets the
+    user's own actions generated. This view groups live flows by server and, for a
+    selected server, lays out that evidence next to the ownership proof.
+    """
+    proofRequested = pyqtSignal(str)   # host -> ask the panel to fetch TLS/WHOIS proof
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._flows = []
+        self._proof_cache = {}
+        self._static_hosts = set()
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        hint = QLabel(
+            "Each server below is proven by the real requests captured to it — not a "
+            "guess or a ping. Select a server to see the traffic that confirms it.")
+        hint.setObjectName("Dim")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        split = QSplitter(Qt.Orientation.Horizontal)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Server", "Calls", "Methods", "Confirmed"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.itemSelectionChanged.connect(self._on_select)
+        split.addWidget(self.table)
+
+        self.evidence = QTextEdit()
+        self.evidence.setReadOnly(True)
+        self.evidence.setPlaceholderText(
+            "Select a server to see the live traffic that proves it's real.")
+        split.addWidget(self.evidence)
+        split.setSizes([420, 860])
+        layout.addWidget(split, 1)
+
+    def _selected_host(self):
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
+            return ""
+        item = self.table.item(rows[0].row(), 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item else ""
+
+    def _select_host(self, host):
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 0)
+            if item and item.data(Qt.ItemDataRole.UserRole) == host:
+                self.table.selectRow(r)
+                return
+
+    def _on_select(self):
+        host = self._selected_host()
+        if host:
+            self._render_evidence(host)
+            self.proofRequested.emit(host)
+
+    def render(self, flows, proof_cache, static_hosts):
+        """Rebuild the server list from the current flows, preserving selection."""
+        self._flows = flows or []
+        self._proof_cache = proof_cache if proof_cache is not None else {}
+        self._static_hosts = set(static_hosts or [])
+
+        by_host = {}
+        for f in self._flows:
+            h = f.get("host", "")
+            if h:
+                by_host.setdefault(h, []).append(f)
+
+        prev = self._selected_host()
+        self.table.blockSignals(True)
+        self.table.setRowCount(0)
+        # Servers with the most captured calls first — strongest evidence on top.
+        for host in sorted(by_host, key=lambda h: (-len(by_host[h]), h)):
+            fl = by_host[host]
+            methods = ", ".join(sorted({x.get("method", "") for x in fl if x.get("method")}))
+            confirmed = "static + live ✓" if host in self._static_hosts else "live"
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            name = QTableWidgetItem(host)
+            name.setData(Qt.ItemDataRole.UserRole, host)
+            if host in self._static_hosts:
+                name.setForeground(Qt.GlobalColor.green)
+            self.table.setItem(r, 0, name)
+            self.table.setItem(r, 1, QTableWidgetItem(str(len(fl))))
+            self.table.setItem(r, 2, QTableWidgetItem(methods))
+            self.table.setItem(r, 3, QTableWidgetItem(confirmed))
+        self.table.blockSignals(False)
+
+        if prev and prev in by_host:
+            self._select_host(prev)
+        elif self.table.rowCount() and not self._selected_host():
+            self.table.selectRow(0)
+        else:
+            cur = self._selected_host()
+            if cur:
+                self._render_evidence(cur)
+
+    def update_proof(self, host, text):
+        """Called when async ownership proof lands; refresh if it's on screen."""
+        if self._selected_host() == host:
+            self._render_evidence(host)
+
+    def clear(self):
+        self._flows = []
+        self.table.setRowCount(0)
+        self.evidence.clear()
+
+    def _render_evidence(self, host):
+        from src.core import server_proof
+        flows = [f for f in self._flows if f.get("host") == host]
+        self.evidence.setPlainText(server_proof.format_server_proof(
+            host, flows,
+            ownership_proof=self._proof_cache.get(host),
+            static_confirmed=host in self._static_hosts))
+
+
+class BehaviorInferenceView(QWidget):
+    """Evidence-graded inference of server-side behavior from the captured flows.
+
+    Renders src.core.behavior_infer's honesty-first report: every claim carries a
+    confidence tier, its evidence, confounders, and how to confirm/falsify — plus
+    an explicit list of what CANNOT be proven from client traffic.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        hint = QLabel(
+            "Server-side behavior (databases, internal services, LLM backends) cannot be "
+            "PROVEN from client traffic. These are graded hypotheses with evidence and "
+            "confounders — never present them to a client as facts.")
+        hint.setObjectName("Dim")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.report = QTextEdit()
+        self.report.setReadOnly(True)
+        self.report.setPlaceholderText(
+            "Capture traffic — inferred server-side behavior appears here.")
+        layout.addWidget(self.report, 1)
+
+    def render(self, flows):
+        from src.core import behavior_infer
+        self.report.setPlainText(behavior_infer.format_report(flows or []))
+
+    def clear(self):
+        self.report.clear()
+
+
 class NetworkCapturePanel(QWidget):
+    # Hard cap on flows kept in memory. Live capture can run for a long time; a
+    # ring buffer keeps the newest calls and drops the oldest so RAM (and the UI
+    # table) never grow without bound. The on-disk capture file is a transient
+    # IPC buffer that is deleted on Stop/Clear — nothing is persisted locally.
+    MAX_FLOWS = 500
+    MAX_SECRETS = 500
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.flows = []
@@ -111,16 +275,30 @@ class NetworkCapturePanel(QWidget):
         self.test_btn.setIcon(qicon("fa5s.vial"))
         self.test_btn.setToolTip("Fire one sample HTTPS request through the proxy to prove capture works.")
         self.test_btn.clicked.connect(self.run_test_request)
+        self.clear_btn = QPushButton("  Clear")
+        self.clear_btn.setIcon(qicon("fa5s.trash"))
+        self.clear_btn.setToolTip("Drop all captured data from memory right now "
+                                  "(frees RAM; capture keeps running if active).")
+        self.clear_btn.clicked.connect(self.clear_captures)
         row2.addWidget(self.start_btn)
         row2.addWidget(self.stop_btn)
         row2.addWidget(self.test_btn)
+        row2.addWidget(self.clear_btn)
         row2.addStretch()
         self.status = QLabel("Idle")
         self.status.setObjectName("Dim")
         row2.addWidget(self.status)
         layout.addLayout(row2)
 
-        # Calls table (left) | detail tabs (right).
+        # Sub-tabs (like AI Decompilation): the live capture view + a Server
+        # Evidence view. Capture controls above stay shared across both.
+        self.subtabs = QTabWidget()
+
+        # --- Sub-tab 1: Live API Capture (unchanged) -------------------------
+        live = QWidget()
+        live_l = QVBoxLayout(live)
+        live_l.setContentsMargins(0, 0, 0, 0)
+
         split = QSplitter(Qt.Orientation.Horizontal)
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
@@ -146,15 +324,33 @@ class NetworkCapturePanel(QWidget):
         self.detail.addTab(self.correlation_view, "Static↔Live")
         split.addWidget(self.detail)
         split.setSizes([640, 640])
-        layout.addWidget(split, 1)
+        live_l.addWidget(split, 1)
 
         sec_label = QLabel("All Captured API Keys / Tokens / Secrets")
         sec_label.setObjectName("Heading")
-        layout.addWidget(sec_label)
+        live_l.addWidget(sec_label)
         self.secrets_view = QTextEdit()
         self.secrets_view.setReadOnly(True)
         self.secrets_view.setMaximumHeight(150)
-        layout.addWidget(self.secrets_view)
+        live_l.addWidget(self.secrets_view)
+        self.subtabs.addTab(live, "Live API Capture")
+
+        # --- Sub-tab 2: Server Evidence (prove the server with real traffic) --
+        self.server_evidence = ServerEvidenceView()
+        self.server_evidence.proofRequested.connect(self._ensure_proof)
+        self.subtabs.addTab(self.server_evidence, "Server Evidence")
+
+        # --- Sub-tab 3: Behavior Inference (graded server-side hypotheses) -----
+        self.behavior_view = BehaviorInferenceView()
+        self.subtabs.addTab(self.behavior_view, "Behavior Inference")
+        # Re-running all detectors on every single flow would be wasteful on a busy
+        # capture, so coalesce refreshes onto a short single-shot timer.
+        self._behavior_timer = QTimer(self)
+        self._behavior_timer.setSingleShot(True)
+        self._behavior_timer.timeout.connect(
+            lambda: self.behavior_view.render(self.flows))
+
+        layout.addWidget(self.subtabs, 1)
 
     # -- target / auto-start -------------------------------------------------
 
@@ -169,6 +365,7 @@ class NetworkCapturePanel(QWidget):
         """Endpoints found by static analysis — for static↔live correlation proof."""
         self._static_hosts = list(hosts or [])
         self._update_correlation()
+        self.server_evidence.render(self.flows, self._proof_cache, self._static_hosts)
 
     def _update_correlation(self):
         from src.core import endpoint_correlation as ec
@@ -274,6 +471,8 @@ class NetworkCapturePanel(QWidget):
 
     def _begin(self, launch=True):
         self._reset()
+        # Remove any previous session's on-disk buffer before starting a new one.
+        self._delete_cap_file()
         self._port = tc.pick_port()
         self._cap_file = os.path.join(tempfile.gettempdir(),
                                       f"re_capture_{int(time.time())}.jsonl")
@@ -326,20 +525,23 @@ class NetworkCapturePanel(QWidget):
         base = os.path.basename(target.rstrip("/"))
         if self._app_proc is None:
             self.status.setText(f"Couldn't launch '{base}'. Use Test, or pick an app/CLI binary.")
-        elif self._likely_pinned(base):
-            # Be honest up front: for pinned apps the env-var proxy decrypts only
-            # unpinned traffic (often just telemetry), not the core API.
+        elif tc.is_electron_app(target):
+            # Electron: we now inject Chromium proxy + cert switches, so the
+            # network service (chat/renderer traffic, not just Node/undici) is
+            # routed through us and the interception CA is accepted. This defeats
+            # verifier-level pinning; only app-level pinning in JS/native resists.
             self.status.setText(
-                f"Launched {base}. Note: it certificate-pins its core API, so the "
-                "network proxy will only decrypt unpinned traffic (e.g. telemetry). "
-                "Full decryption needs in-process instrumentation (Runtime Crypto).")
+                f"Capturing {base} (Electron) — routing Chromium's network service "
+                "through the interceptor. Use the app (send a chat) to generate traffic.")
             self.output_hint(
-                f"{base} pins its main API connection. A network interceptor (this panel, "
-                "Charles, Proxyman, Burp) CANNOT decrypt a pinned connection — only the "
-                "app's own process can read that plaintext.\n\n"
-                "What you WILL see here: any unpinned traffic (telemetry/updates), plus the "
-                "Static↔Live correlation and live socket owners.\n"
-                "What captures the core API: the Runtime Crypto tab (in-process TLS hooks).")
+                f"{base} is an Electron app. Its chat/API traffic runs through Chromium's "
+                "network service, which ignores the HTTP_PROXY env var — so it's launched "
+                "with Chromium switches (--proxy-server + --ignore-certificate-errors) to "
+                "force it through this interceptor and accept our CA.\n\n"
+                "You should now see the real chat requests/responses appear as you use the "
+                "app. If the table stays empty for the core API, the app pins at the "
+                "application layer (in JS/native, above TLS) — that case is covered by the "
+                "Runtime Crypto tab (in-process hooks).")
         else:
             self.status.setText(f"Capturing {base}…  (use the app to generate traffic)")
 
@@ -376,15 +578,52 @@ class NetworkCapturePanel(QWidget):
             except Exception:
                 pass
         self._proof_workers = []
+        # Delete the on-disk capture buffer so nothing is persisted locally.
+        self._delete_cap_file()
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._refresh_primary()
-        self.status.setText(f"Stopped — {len(self.flows)} call(s) captured.")
+        self.status.setText(f"Stopped — {len(self.flows)} call(s) captured "
+                            "(on-disk buffer deleted).")
 
     def output_hint(self, text):
         """Surface a help/diagnostic message in the detail pane."""
         self.req_view.setPlainText(text)
         self.detail.setCurrentWidget(self.req_view)
+
+    def _enforce_flow_cap(self):
+        """Keep only the newest MAX_FLOWS flows in memory + table (ring buffer)."""
+        over = len(self.flows) - self.MAX_FLOWS
+        while over > 0 and self.flows:
+            self.flows.pop(0)
+            self.table.removeRow(0)
+            over -= 1
+
+    def _delete_cap_file(self):
+        """Remove the transient JSONL capture file (IPC buffer) from disk."""
+        f = self._cap_file
+        if f and os.path.exists(f):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+    def clear_captures(self):
+        """Purge all captured data from memory immediately (frees RAM).
+
+        Works whether or not capture is active. If a capture is running we skip
+        past whatever is already on disk (advance the read offset to EOF) so the
+        cleared calls don't reappear on the next tail; capture then continues.
+        """
+        self._reset()
+        if self._cap_file and os.path.exists(self._cap_file):
+            try:
+                self._offset = os.path.getsize(self._cap_file)
+            except OSError:
+                self._offset = 0
+        capturing = self._proxy_proc is not None
+        self.status.setText("Cleared captured data from memory." +
+                            ("  Still capturing…" if capturing else ""))
 
     def _reset(self):
         self.flows = []
@@ -393,6 +632,8 @@ class NetworkCapturePanel(QWidget):
         for v in (self.req_view, self.resp_view, self.pii_view, self.proof_view,
                   self.flow_secrets, self.correlation_view, self.secrets_view):
             v.clear()
+        self.server_evidence.clear()
+        self.behavior_view.clear()
 
     # -- tail + display ------------------------------------------------------
 
@@ -433,6 +674,13 @@ class NetworkCapturePanel(QWidget):
         n_keys = len(rec.get("secrets", []))
 
         r = self.table.rowCount()
+        # Are we "following the tail"? True if nothing is selected yet, or the
+        # current selection is the row that was last (so a live viewer keeps
+        # seeing the newest call). If the user is inspecting an earlier row, we
+        # leave their selection alone.
+        sel = self.table.selectionModel().selectedRows()
+        following = (not sel) or (sel[0].row() == r - 1)
+
         self.table.insertRow(r)
         ts = time.strftime("%H:%M:%S", time.localtime(rec.get("ts", time.time())))
         cells = [ts, rec.get("method", ""), host, rec.get("path", ""),
@@ -447,11 +695,27 @@ class NetworkCapturePanel(QWidget):
             entry = f"[{sct['type']}]  {sct['value']}\n    from {rec.get('method')} {rec.get('url')}"
             if entry not in self._all_secrets:
                 self._all_secrets.append(entry)
+        if len(self._all_secrets) > self.MAX_SECRETS:
+            del self._all_secrets[:-self.MAX_SECRETS]
         if self._all_secrets:
             self.secrets_view.setPlainText("\n".join(self._all_secrets))
+
+        # Bound memory: keep only the newest MAX_FLOWS calls, dropping the oldest
+        # rows in lockstep so self.flows[idx] stays aligned with table row idx.
+        self._enforce_flow_cap()
+
+        # Auto-select the newest row so the Request/Response/Secrets/Proof tabs fill
+        # immediately — otherwise the detail pane stays blank until a manual click
+        # and the capture looks empty even though it worked.
+        if following and self.table.rowCount():
+            self.table.selectRow(self.table.rowCount() - 1)
         self.table.scrollToBottom()
         if self._static_hosts:
             self._update_correlation()
+        # Keep the Server Evidence sub-tab in sync with every captured flow.
+        self.server_evidence.render(self.flows, self._proof_cache, self._static_hosts)
+        # Behavior inference is coalesced (debounced) to stay light under load.
+        self._behavior_timer.start(500)
 
     def _show_detail(self):
         rows = self.table.selectionModel().selectedRows()
@@ -494,20 +758,34 @@ class NetworkCapturePanel(QWidget):
             self.proof_view.setPlainText(self._proof_cache[host])
         elif host:
             self.proof_view.setPlainText(f"Fetching ownership proof for {host}…")
-            worker = _ProofWorker(host)
-            worker.done.connect(self._on_proof)
-            # Keep a reference so the QThread isn't garbage-collected mid-run (which
-            # aborts Qt with "QThread: Destroyed while thread is still running").
-            self._proof_workers.append(worker)
-            worker.finished.connect(
-                lambda w=worker: self._proof_workers.remove(w)
-                if w in self._proof_workers else None)
-            worker.start()
+            self._ensure_proof(host)
 
         secs = rec.get("secrets", [])
         self.flow_secrets.setPlainText(
             "\n".join(f"[{s['type']}]  {s['value']}" for s in secs)
             if secs else "No secrets found in this request.")
+
+    def _ensure_proof(self, host):
+        """Fetch ownership proof for `host` once (async), shared by the detail tab
+        and the Server Evidence view. No-op if already cached or in flight."""
+        if not host:
+            return
+        if host in self._proof_cache:
+            self.server_evidence.update_proof(host, self._proof_cache[host])
+            return
+        # Don't start a second worker for a host already being fetched.
+        if any(getattr(w, "host", None) == host and w.isRunning()
+               for w in self._proof_workers):
+            return
+        worker = _ProofWorker(host)
+        worker.done.connect(self._on_proof)
+        # Keep a reference so the QThread isn't garbage-collected mid-run (which
+        # aborts Qt with "QThread: Destroyed while thread is still running").
+        self._proof_workers.append(worker)
+        worker.finished.connect(
+            lambda w=worker: self._proof_workers.remove(w)
+            if w in self._proof_workers else None)
+        worker.start()
 
     def _on_proof(self, host, text):
         self._proof_cache[host] = text
@@ -515,6 +793,8 @@ class NetworkCapturePanel(QWidget):
         if rows and rows[0].row() < len(self.flows):
             if self.flows[rows[0].row()].get("host") == host:
                 self.proof_view.setPlainText(text)
+        # Refresh the Server Evidence view if it's showing this host.
+        self.server_evidence.update_proof(host, text)
 
     @staticmethod
     def _pretty(text):

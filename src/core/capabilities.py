@@ -62,7 +62,8 @@ def package_available(key):
     if not spec:
         return False
     try:
-        return importlib.util.find_spec(spec[1]) is not None
+        # spec[0] is the IMPORT name (e.g. "frida"); spec[1] is the human label.
+        return importlib.util.find_spec(spec[0]) is not None
     except (ImportError, ValueError):
         return False
 

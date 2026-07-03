@@ -28,3 +28,9 @@ logs/
 output_*.c
 projects/
 temp/
+
+# Captured live traffic — may contain real tokens/PII. NEVER commit.
+re_capture_*.jsonl
+*_capture_*.jsonl
+*.captures.jsonl
+captured_secrets*.txt

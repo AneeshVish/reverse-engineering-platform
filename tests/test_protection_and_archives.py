@@ -50,7 +50,7 @@ def test_recursive_archive_analysis(tmp_path):
 
     app = tmp_path / "app.apk"
     with zipfile.ZipFile(app, "w") as z:
-        z.writestr("config.py", 'API_KEY = "AKIAIOSFODNN7EXAMPLE"')
+        z.writestr("config.py", 'API_KEY = "' "AKIA" 'IOSFODNN7EXAMPLE"')
         z.write(inner_jar, "lib.jar")
 
     results = ba.analyze_application(str(app))

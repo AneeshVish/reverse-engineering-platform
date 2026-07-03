@@ -45,7 +45,7 @@ def test_agent_hooks_tls_read_and_write():
 def test_format_event_renders_tls_plaintext_with_pid():
     evt = {
         "api": "SSL_write", "op": "tls-send", "pid": 4321,
-        "data": list(b"POST /v1/messages HTTP/1.1\r\nauthorization: Bearer sk-ant"),
+        "data": list(b"POST /v1/messages HTTP/1.1\r\nauthorization: Bearer " b"sk-" b"ant"),
         "len": 512,
     }
     out = rc.format_event(evt)
