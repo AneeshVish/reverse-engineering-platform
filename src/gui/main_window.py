@@ -248,6 +248,29 @@ class DecompileWorker(QThread):
             self.progress_update.emit(f"Decompilation error: {str(e)}")
 
 
+class GhidraLogWorker(QThread):
+    """Run Ghidra decompilation off the UI thread for log/source extraction."""
+    ghidra_complete = pyqtSignal(str)
+    progress_update = pyqtSignal(str)
+
+    def __init__(self, file_path, decompiler_manager):
+        super().__init__()
+        self.file_path = file_path
+        self.decompiler_manager = decompiler_manager
+
+    def run(self):
+        try:
+            self.progress_update.emit("Running Ghidra decompilation (background)…")
+            from src.core import capabilities
+            if not capabilities.tool_available("ghidra"):
+                self.ghidra_complete.emit("")
+                return
+            result = self.decompiler_manager._run_ghidra(self.file_path)
+            self.ghidra_complete.emit(result or "")
+        except Exception as e:
+            self.ghidra_complete.emit(f"[ERROR] Ghidra decompilation failed: {e}")
+
+
 class ThreatAnalysisWorker(QThread):
     """
     Worker thread for running threat intelligence checks on the binary file.
@@ -430,9 +453,66 @@ class MainWindow(QMainWindow):
         self.analysis_worker.analysis_complete.connect(self.on_analysis_complete)
         self.analysis_worker.progress_update.connect(self.update_progress)
         self.analysis_worker.start()
+        # Reset engagement evidence for new target session.
+        try:
+            from src.core.evidence_store import reset_session_store
+            from src.core.target_profile import set_session_profile, TargetProfile
+            reset_session_store()
+            set_session_profile(TargetProfile.from_path(file_path))
+        except Exception:
+            pass
         # Point the live-capture panel at the loaded app.
         if hasattr(self, 'network_capture_panel'):
             self.network_capture_panel.set_target(file_path)
+
+    def _on_threat_complete(self, data):
+        results = data.get("results", {})
+        rep = results.get("reputation_score", 0)
+        threats = results.get("threats_detected", [])
+        text = f"Hash: {data.get('hash', '')}\nReputation: {rep}\nThreats: {len(threats)}"
+        for t in threats[:10]:
+            text += f"\n  • {t}"
+        self.threat_results_view.setPlainText(text)
+        self.ioc_list.clear()
+        for ioc in results.get("iocs", [])[:50]:
+            if isinstance(ioc, dict):
+                QTreeWidgetItem(self.ioc_list, [ioc.get("type", ""), ioc.get("value", ""),
+                                                ioc.get("context", "")])
+        if hasattr(self, 'log_view'):
+            self.log_view.append(f"[THREAT] Analysis complete — reputation {rep}")
+
+    def _on_ghidra_log_complete(self, ghidra_result):
+        if not hasattr(self, 'log_view'):
+            return
+        c_blocks = []
+        if ghidra_result:
+            lines = ghidra_result.splitlines()
+            current_block = []
+            inside_c = False
+            for line in lines:
+                if line.strip().startswith("Decompiling:") or line.strip().startswith("[ERROR]"):
+                    continue
+                if line.strip() in ("=" * 60, "=", ""):
+                    if current_block:
+                        c_blocks.append("\n".join(current_block).strip())
+                        current_block = []
+                    inside_c = False
+                    continue
+                if any(x in line for x in [';', '{', '}', '//', '#include', 'return',
+                                           'int ', 'void ', 'char ']):
+                    inside_c = True
+                if inside_c:
+                    current_block.append(line)
+            if current_block:
+                c_blocks.append("\n".join(current_block).strip())
+        c_code = "\n\n".join([b for b in c_blocks if len(b) > 20])
+        self.log_view.append('[C DECOMPILATION OUTPUT]')
+        if c_code:
+            self.log_view.append(c_code)
+        elif ghidra_result and ('error' in ghidra_result.lower() or 'failed' in ghidra_result.lower()):
+            self.log_view.append(ghidra_result.strip())
+        else:
+            self.log_view.append('[INFO] Ghidra returned no usable C blocks (may be unavailable).')
 
     def configure_misp(self):
         if hasattr(self, 'log_view'):
@@ -1157,6 +1237,79 @@ class MainWindow(QMainWindow):
             self.endpoint_detection_view.setPlainText(f"[ERROR] Endpoint detection failed: {e}")
             self._last_endpoint_count = 0
 
+    def _schedule_server_access_refresh(self):
+        timer = getattr(self, "_server_access_timer", None)
+        if timer is None:
+            self._server_access_timer = QTimer(self)
+            self._server_access_timer.setSingleShot(True)
+            self._server_access_timer.timeout.connect(self._refresh_server_access)
+        self._server_access_timer.start(400)
+
+    def _refresh_server_access(self):
+        sap = getattr(self, "server_access_panel", None)
+        ncp = getattr(self, "network_capture_panel", None)
+        if not sap or not ncp:
+            return
+        ap = getattr(self, "access_path_panel", None)
+        base = ap.base_url.text().strip() if ap else ""
+        app_name = getattr(self, "_app_name", None) or ""
+        if not app_name and getattr(self, "current_file_path", None):
+            app_name = os.path.basename(self.current_file_path).replace(".app", "")
+        sap.update_from_capture(ncp.flows, base_url=base, app_name=app_name)
+
+    def _schedule_evidence_chain_refresh(self):
+        timer = getattr(self, "_evidence_chain_timer", None)
+        if timer is None:
+            self._evidence_chain_timer = QTimer(self)
+            self._evidence_chain_timer.setSingleShot(True)
+            self._evidence_chain_timer.timeout.connect(self._refresh_evidence_chain)
+        self._evidence_chain_timer.start(500)
+
+    def _refresh_evidence_chain(self):
+        panel = getattr(self, "evidence_chain_panel", None)
+        ncp = getattr(self, "network_capture_panel", None)
+        if not panel:
+            return
+        flows = getattr(ncp, "flows", []) if ncp else []
+        ap = getattr(self, "access_path_panel", None)
+        probes = getattr(ap, "_probe_results", []) if ap else []
+        panel.set_live_context(flows=flows, probe_results=probes)
+        panel.refresh()
+
+    def _schedule_access_path_base_url(self):
+        """Debounced auto-fill of Access Path base URL from capture + live sockets."""
+        timer = getattr(self, "_access_path_url_timer", None)
+        if timer is None:
+            self._access_path_url_timer = QTimer(self)
+            self._access_path_url_timer.setSingleShot(True)
+            self._access_path_url_timer.timeout.connect(self._refresh_access_path_base_url)
+        self._access_path_url_timer.start(350)
+
+    def _refresh_access_path_base_url(self):
+        if not hasattr(self, "access_path_panel"):
+            return
+        from src.core import api_base_url
+        ncp = getattr(self, "network_capture_panel", None)
+        flows = getattr(ncp, "flows", []) if ncp else []
+        app_name = getattr(self, "_app_name", None) or ""
+        if not app_name and getattr(self, "current_file_path", None):
+            app_name = os.path.basename(self.current_file_path).replace(".app", "")
+        sugg = api_base_url.suggest(
+            flows=flows,
+            live_conns=getattr(self, "_last_live_conns", []),
+            architecture_intel=getattr(self, "_last_arch_intel", {}),
+            app_name=app_name,
+            static_endpoints=getattr(self, "_last_endpoints", []),
+            live_hosts=getattr(self, "_last_live_hosts", []),
+            live_ips=getattr(self, "_last_live_ips", []),
+        )
+        if sugg and self.access_path_panel.set_suggested_base_url(sugg, app_name=app_name):
+            if hasattr(self, "log_view"):
+                self.log_view.append(
+                    f"[ACCESS PATH] Auto base URL: {sugg.url} — {sugg.reason}")
+        self._schedule_server_access_refresh()
+        self._schedule_evidence_chain_refresh()
+
     def _on_network_resolved(self, resolved, local, live):
         from src.core import network_intel, live_connections
         app_name = getattr(self, '_app_name', None) or "the app"
@@ -1173,6 +1326,9 @@ class MainWindow(QMainWindow):
                 live_ips.append(ip)
             if c.get("rdns"):
                 live_hosts.append(c["rdns"])
+        self._last_live_conns = live or []
+        self._last_live_hosts = live_hosts
+        self._last_live_ips = live_ips
         try:
             from src.core import endpoint_rank
             ranked = endpoint_rank.rank(
@@ -1201,6 +1357,7 @@ class MainWindow(QMainWindow):
             real = getattr(self, '_last_real_endpoint_count', 0)
             self.insights_panel.update_field(
                 'endpoints', f"{real} real / {self._last_endpoint_count} found  ·  {len(live)} live")
+        self._schedule_access_path_base_url()
 
     def _show_electron_source(self, app, src_dir, nfiles):
         """Show the extracted real JS source in the Source Code tab."""
@@ -1447,10 +1604,35 @@ class MainWindow(QMainWindow):
 
         try:
             from src.gui.network_capture_panel import NetworkCapturePanel
+            from src.gui.network_intelligence_panel import NetworkIntelligencePanel
             self.network_capture_panel = NetworkCapturePanel()
+            self.network_intelligence_panel = NetworkIntelligencePanel()
+            self.network_intelligence_panel.bind_capture(self.network_capture_panel)
             add_tab(self.network_capture_panel, "Network Capture", "fa5s.wifi")
+            add_tab(self.network_intelligence_panel, "Network Intelligence", "fa5s.project-diagram")
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to load Network Capture panel: {e}")
+
+        try:
+            from src.gui.access_path_panel import AccessPathPanel
+            self.access_path_panel = AccessPathPanel()
+            add_tab(self.access_path_panel, "Access Path", "fa5s.route")
+            if hasattr(self, 'network_capture_panel'):
+                self.network_capture_panel.flowsUpdated.connect(
+                    self._schedule_access_path_base_url)
+                self.network_capture_panel.flowsUpdated.connect(
+                    self._schedule_server_access_refresh)
+                self.network_capture_panel.flowsUpdated.connect(
+                    self._schedule_evidence_chain_refresh)
+        except Exception as e:
+            self.log_view.append(f"[ERROR] Failed to load Access Path panel: {e}")
+
+        try:
+            from src.gui.server_access_panel import ServerAccessPanel
+            self.server_access_panel = ServerAccessPanel()
+            add_tab(self.server_access_panel, "Server Access", "fa5s.sign-in-alt")
+        except Exception as e:
+            self.log_view.append(f"[ERROR] Failed to load Server Access panel: {e}")
 
         try:
             from src.gui.privesc_panel import PrivescPanel
@@ -1554,6 +1736,14 @@ class MainWindow(QMainWindow):
         threat_layout.addWidget(self.ioc_list)
         self.right_tabs.addTab(threat_widget, "Threat")
 
+        try:
+            from src.gui.evidence_chain_panel import EvidenceChainPanel
+            self.evidence_chain_panel = EvidenceChainPanel()
+            self.right_tabs.addTab(self.evidence_chain_panel, "Evidence Chain")
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[ERROR] Evidence Chain panel: {e}")
+
         # Settings.
         settings_widget = QWidget()
         settings_layout = QVBoxLayout(settings_widget)
@@ -1583,6 +1773,7 @@ class MainWindow(QMainWindow):
         self.entropy_cb = QCheckBox("Show Entropy Analysis")
         self.entropy_cb.setChecked(True)
         settings_layout.addWidget(self.entropy_cb)
+
         settings_layout.addStretch()
         self.right_tabs.addTab(settings_widget, "Settings")
 
@@ -1958,45 +2149,47 @@ class MainWindow(QMainWindow):
                 self.log_view.append(f"[INFO] Entry point: {bin_info.get('entry_point', 'Unknown')}")
                 self.log_view.append(f"[INFO] Sections: {[s['name'] for s in results.get('sections', [])]}")
             self.log_view.append(f"[INFO] Disassembly view updated with {len(instructions)} instructions.")
-            # Append C decompilation output (always) using Ghidra, not AI
-            try:
-                ghidra_result = self.decompiler_manager._run_ghidra(self.current_file_path)
-                # Extract only actual C code blocks from Ghidra output
-                c_blocks = []
-                if ghidra_result:
-                    lines = ghidra_result.splitlines()
-                    current_block = []
-                    inside_c = False
-                    for line in lines:
-                        # Skip banners, decompiling lines, and separators
-                        if line.strip().startswith("Decompiling:") or line.strip().startswith("[ERROR]"):
-                            continue
-                        if line.strip() == "=" * 60 or line.strip() == "=" or line.strip() == "":
-                            if current_block:
-                                c_blocks.append("\n".join(current_block).strip())
-                                current_block = []
-                            inside_c = False
-                            continue
-                        # Most C code lines contain ';', '{', '}', or comments
-                        if any(x in line for x in [';', '{', '}', '//', '#include', 'return', 'int ', 'void ', 'char ', 'float ', 'double ', 'if(', 'for(', 'while(']):
-                            inside_c = True
-                        if inside_c:
-                            current_block.append(line)
-                    # Append last block
-                    if current_block:
-                        c_blocks.append("\n".join(current_block).strip())
-                c_code = "\n\n".join([b for b in c_blocks if len(b) > 20])  # Only keep non-trivial blocks
-                self.log_view.append('[C DECOMPILATION OUTPUT]')
-                if c_code:
-                    self.log_view.append(c_code)
-                else:
-                    # If Ghidra returned an error, show it
-                    if ghidra_result and ('error' in ghidra_result.lower() or 'failed' in ghidra_result.lower()):
-                        self.log_view.append(ghidra_result.strip())
-                    else:
-                        self.log_view.append('[ERROR] Ghidra decompilation failed or returned no usable C code.')
-            except Exception as e:
-                self.log_view.append(f'[ERROR] Ghidra decompilation failed: {e}')
+            # Ghidra runs off the UI thread — never block the window for minutes.
+            if self.current_file_path and os.path.isfile(self.current_file_path):
+                self._ghidra_worker = GhidraLogWorker(self.current_file_path, self.decompiler_manager)
+                self._ghidra_worker.ghidra_complete.connect(self._on_ghidra_log_complete)
+                self._ghidra_worker.progress_update.connect(self.update_progress)
+                self._ghidra_worker.start()
+
+        # Architecture intel → evidence store + access path context
+        try:
+            from src.core import client_architecture_intel as cai
+            from src.core.target_profile import session_profile
+            if self.current_file_path:
+                intel = cai.analyze_path(self.current_file_path)
+                cai.to_evidence(intel)
+                prof = session_profile()
+                prof.path = self.current_file_path
+                prof.merge_architecture_intel(intel)
+                self._last_arch_intel = intel
+                if hasattr(self, 'access_path_panel'):
+                    an = getattr(self, "_app_name", None) or os.path.basename(
+                        self.current_file_path or "").replace(".app", "")
+                    self.access_path_panel.set_context(
+                        intel=intel,
+                        flows=getattr(self.network_capture_panel, 'flows', [])
+                        if hasattr(self, 'network_capture_panel') else [],
+                        app_name=an,
+                    )
+                self._schedule_access_path_base_url()
+                self._schedule_evidence_chain_refresh()
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[WARN] Architecture intel: {e}")
+
+        # Threat intelligence (if enabled)
+        if getattr(self, 'threat_intel_cb', None) and self.threat_intel_cb.isChecked():
+            if self.current_file_path and os.path.isfile(self.current_file_path):
+                self._threat_worker = ThreatAnalysisWorker(self.current_file_path, self.threat_intel)
+                self._threat_worker.threat_complete.connect(self._on_threat_complete)
+                self._threat_worker.progress_update.connect(self.update_progress)
+                self._threat_worker.start()
+
         # --- Compose analysis log for AI decompilation ---
         analysis_log = self.compose_analysis_log(results)
         results['analysis_log'] = analysis_log  # Store for later use
@@ -2051,6 +2244,12 @@ class MainWindow(QMainWindow):
         except Exception as e:
             if hasattr(self, 'log_view'):
                 self.log_view.append(f"[WARN] Visualization update failed: {e}")
+
+        # Point crypto/key panels at loaded target
+        if hasattr(self, 'crypto_tools_panel') and self.current_file_path:
+            self.crypto_tools_panel.set_target(self.current_file_path)
+        if hasattr(self, 'key_analysis_panel') and self.current_file_path:
+            self.key_analysis_panel.set_target(self.current_file_path)
 
         # NOTE: C decompilation is handled asynchronously by DecompileWorker below.
         # The previous synchronous decompile_parallel() call here blocked the UI

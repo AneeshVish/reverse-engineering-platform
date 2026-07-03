@@ -40,6 +40,7 @@ PANEL_IMPORTS = [
     ("src.gui.key_analysis_panel", "KeyAnalysisPanel"),
     ("src.gui.security_audit_panel", "SecurityAuditPanel"),
     ("src.gui.network_capture_panel", "NetworkCapturePanel"),
+    ("src.gui.network_intelligence_panel", "NetworkIntelligencePanel"),
     ("src.gui.privesc_panel", "PrivescPanel"),
     ("src.gui.threat_lab_panel", "ThreatLabPanel"),
     ("src.gui.runtime_crypto_panel", "RuntimeCryptoPanel"),

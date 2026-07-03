@@ -9,7 +9,13 @@ from src.utils.paths import script_path
 class KeyAnalysisPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._target_path = ""
         self.init_ui()
+
+    def set_target(self, path: str):
+        self._target_path = path or ""
+        if path and hasattr(self, 'output'):
+            self.output.append(f"[Target] {path}")
 
     def init_ui(self):
         layout = QVBoxLayout(self)

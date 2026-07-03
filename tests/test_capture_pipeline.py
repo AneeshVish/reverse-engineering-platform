@@ -141,6 +141,13 @@ def _qapp():
     yield app
 
 
+def _bind_intel(panel):
+    from src.gui.network_intelligence_panel import NetworkIntelligencePanel
+    intel = NetworkIntelligencePanel()
+    panel.set_intelligence_panel(intel)
+    return intel
+
+
 def test_panel_renders_full_detail_tabs(_qapp):
     from src.gui.network_capture_panel import NetworkCapturePanel
     panel = NetworkCapturePanel()
@@ -202,6 +209,7 @@ def test_new_flow_does_not_steal_selection_from_older_inspected_row(_qapp):
 def test_server_evidence_groups_flows_and_shows_real_traffic(_qapp):
     from src.gui.network_capture_panel import NetworkCapturePanel
     panel = NetworkCapturePanel()
+    _bind_intel(panel)
     panel._proof_cache["api.anthropic.com"] = "Owner: Anthropic (cached)"
 
     # Two calls to the same server + one to another. Response headers carry the
@@ -242,6 +250,7 @@ def test_server_evidence_groups_flows_and_shows_real_traffic(_qapp):
 def test_server_evidence_marks_static_confirmed(_qapp):
     from src.gui.network_capture_panel import NetworkCapturePanel
     panel = NetworkCapturePanel()
+    _bind_intel(panel)
     panel.set_static_hosts(["api.anthropic.com"])
     panel._add_flow({"ts": time.time(), "method": "POST",
                      "url": "https://api.anthropic.com/v1/messages",
@@ -273,6 +282,7 @@ def test_flow_ring_buffer_bounds_memory(_qapp):
 def test_clear_captures_frees_memory(_qapp):
     from src.gui.network_capture_panel import NetworkCapturePanel
     panel = NetworkCapturePanel()
+    _bind_intel(panel)
     panel._proof_cache["h.com"] = "cached"
     for i in range(5):
         panel._add_flow({"ts": time.time(), "method": "GET",
@@ -303,6 +313,7 @@ def test_stop_deletes_ondisk_capture_file(_qapp, tmp_path):
 def test_behavior_inference_subtab_renders_graded_hypotheses(_qapp):
     from src.gui.network_capture_panel import NetworkCapturePanel
     panel = NetworkCapturePanel()
+    _bind_intel(panel)
     panel._proof_cache["api.anthropic.com"] = "cached"
     panel._add_flow({"ts": time.time(), "method": "POST",
                      "url": "https://api.anthropic.com/v1/messages",

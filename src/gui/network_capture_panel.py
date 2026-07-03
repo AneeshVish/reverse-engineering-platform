@@ -200,11 +200,32 @@ class BehaviorInferenceView(QWidget):
         self.report.clear()
 
 
+class _ReportSubTab(QWidget):
+    """Generic read-only report sub-tab."""
+    def __init__(self, hint_text="", parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        if hint_text:
+            hint = QLabel(hint_text)
+            hint.setObjectName("Dim")
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+        self.report = QTextEdit()
+        self.report.setReadOnly(True)
+        layout.addWidget(self.report, 1)
+
+    def set_text(self, text):
+        self.report.setPlainText(text)
+
+    def clear(self):
+        self.report.clear()
+
+
 class NetworkCapturePanel(QWidget):
-    # Hard cap on flows kept in memory. Live capture can run for a long time; a
-    # ring buffer keeps the newest calls and drops the oldest so RAM (and the UI
-    # table) never grow without bound. The on-disk capture file is a transient
-    # IPC buffer that is deleted on Stop/Clear — nothing is persisted locally.
+    flowsUpdated = pyqtSignal()
+
+    # Hard cap on flows kept in memory.
     MAX_FLOWS = 500
     MAX_SECRETS = 500
 
@@ -222,6 +243,7 @@ class NetworkCapturePanel(QWidget):
         self._static_hosts = []
         self._proof_cache = {}
         self._proof_workers = []
+        self._intel = None
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tail)
         self._build_ui()
@@ -290,15 +312,6 @@ class NetworkCapturePanel(QWidget):
         row2.addWidget(self.status)
         layout.addLayout(row2)
 
-        # Sub-tabs (like AI Decompilation): the live capture view + a Server
-        # Evidence view. Capture controls above stay shared across both.
-        self.subtabs = QTabWidget()
-
-        # --- Sub-tab 1: Live API Capture (unchanged) -------------------------
-        live = QWidget()
-        live_l = QVBoxLayout(live)
-        live_l.setContentsMargins(0, 0, 0, 0)
-
         split = QSplitter(Qt.Orientation.Horizontal)
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
@@ -324,33 +337,28 @@ class NetworkCapturePanel(QWidget):
         self.detail.addTab(self.correlation_view, "Static↔Live")
         split.addWidget(self.detail)
         split.setSizes([640, 640])
-        live_l.addWidget(split, 1)
+        layout.addWidget(split, 1)
 
         sec_label = QLabel("All Captured API Keys / Tokens / Secrets")
         sec_label.setObjectName("Heading")
-        live_l.addWidget(sec_label)
+        layout.addWidget(sec_label)
         self.secrets_view = QTextEdit()
         self.secrets_view.setReadOnly(True)
         self.secrets_view.setMaximumHeight(150)
-        live_l.addWidget(self.secrets_view)
-        self.subtabs.addTab(live, "Live API Capture")
+        layout.addWidget(self.secrets_view)
 
-        # --- Sub-tab 2: Server Evidence (prove the server with real traffic) --
-        self.server_evidence = ServerEvidenceView()
-        self.server_evidence.proofRequested.connect(self._ensure_proof)
-        self.subtabs.addTab(self.server_evidence, "Server Evidence")
+    def set_intelligence_panel(self, panel):
+        """Attach the Network Intelligence tab so analytics refresh with capture."""
+        self._intel = panel
+        panel.proofRequested.connect(self._ensure_proof)
 
-        # --- Sub-tab 3: Behavior Inference (graded server-side hypotheses) -----
-        self.behavior_view = BehaviorInferenceView()
-        self.subtabs.addTab(self.behavior_view, "Behavior Inference")
-        # Re-running all detectors on every single flow would be wasteful on a busy
-        # capture, so coalesce refreshes onto a short single-shot timer.
-        self._behavior_timer = QTimer(self)
-        self._behavior_timer.setSingleShot(True)
-        self._behavior_timer.timeout.connect(
-            lambda: self.behavior_view.render(self.flows))
+    @property
+    def server_evidence(self):
+        return self._intel.server_evidence if self._intel else None
 
-        layout.addWidget(self.subtabs, 1)
+    @property
+    def behavior_view(self):
+        return self._intel.behavior_view if self._intel else None
 
     # -- target / auto-start -------------------------------------------------
 
@@ -365,7 +373,8 @@ class NetworkCapturePanel(QWidget):
         """Endpoints found by static analysis — for static↔live correlation proof."""
         self._static_hosts = list(hosts or [])
         self._update_correlation()
-        self.server_evidence.render(self.flows, self._proof_cache, self._static_hosts)
+        if self._intel:
+            self._intel.schedule_refresh(self.flows, self._proof_cache, self._static_hosts)
 
     def _update_correlation(self):
         from src.core import endpoint_correlation as ec
@@ -632,8 +641,16 @@ class NetworkCapturePanel(QWidget):
         for v in (self.req_view, self.resp_view, self.pii_view, self.proof_view,
                   self.flow_secrets, self.correlation_view, self.secrets_view):
             v.clear()
-        self.server_evidence.clear()
-        self.behavior_view.clear()
+        if self._intel:
+            self._intel.clear()
+
+    def add_region_sample(self, sample: dict):
+        if self._intel:
+            self._intel.add_region_sample(sample)
+
+    def add_probe_result(self, result: dict):
+        if self._intel:
+            self._intel.add_probe_result(result)
 
     # -- tail + display ------------------------------------------------------
 
@@ -659,6 +676,12 @@ class NetworkCapturePanel(QWidget):
                 self._add_flow(rec)
 
     def _add_flow(self, rec):
+        rec = dict(rec)
+        try:
+            from src.core import streaming_capture
+            rec = streaming_capture.enrich_flow(rec)
+        except Exception:
+            pass
         self.flows.append(rec)
         host = rec.get("host", "")
         tracker = tracker_list.classify(host)
@@ -712,10 +735,9 @@ class NetworkCapturePanel(QWidget):
         self.table.scrollToBottom()
         if self._static_hosts:
             self._update_correlation()
-        # Keep the Server Evidence sub-tab in sync with every captured flow.
-        self.server_evidence.render(self.flows, self._proof_cache, self._static_hosts)
-        # Behavior inference is coalesced (debounced) to stay light under load.
-        self._behavior_timer.start(500)
+        if self._intel:
+            self._intel.schedule_refresh(self.flows, self._proof_cache, self._static_hosts)
+        self.flowsUpdated.emit()
 
     def _show_detail(self):
         rows = self.table.selectionModel().selectedRows()
@@ -771,7 +793,8 @@ class NetworkCapturePanel(QWidget):
         if not host:
             return
         if host in self._proof_cache:
-            self.server_evidence.update_proof(host, self._proof_cache[host])
+            if self._intel:
+                self._intel.update_proof(host, self._proof_cache[host])
             return
         # Don't start a second worker for a host already being fetched.
         if any(getattr(w, "host", None) == host and w.isRunning()
@@ -793,8 +816,8 @@ class NetworkCapturePanel(QWidget):
         if rows and rows[0].row() < len(self.flows):
             if self.flows[rows[0].row()].get("host") == host:
                 self.proof_view.setPlainText(text)
-        # Refresh the Server Evidence view if it's showing this host.
-        self.server_evidence.update_proof(host, text)
+        if self._intel:
+            self._intel.update_proof(host, text)
 
     @staticmethod
     def _pretty(text):

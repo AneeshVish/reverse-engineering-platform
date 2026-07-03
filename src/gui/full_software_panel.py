@@ -131,9 +131,24 @@ class FullSoftwarePanel(QWidget):
         self.bundle_summary = results.pop('__bundle_summary__', '')
         self.analysis_results = results
         self.populate_tree()
+        folder = getattr(self.analysis_worker, 'folder_path', '')
+        # Architecture intelligence report (RED TEAM L1)
+        try:
+            from src.core import client_architecture_intel as cai
+            self._arch_intel = cai.analyze_path(folder)
+            cai.to_evidence(self._arch_intel)
+            arch_report = cai.format_report(self._arch_intel)
+            from src.core.target_profile import session_profile
+            session_profile().merge_architecture_intel(self._arch_intel)
+        except Exception as e:
+            arch_report = f"[Architecture intel error: {e}]"
+            self._arch_intel = {}
         if self.bundle_summary:
             self.viewer.setPlainText(self.bundle_summary +
+                                     "\n\n" + arch_report +
                                      "\n\n(Select a file on the left for its details.)")
+        else:
+            self.viewer.setPlainText(arch_report)
 
     def populate_tree(self):
         self.tree.clear()

@@ -11,7 +11,17 @@ from src.utils.paths import script_path
 class CryptoToolsPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._target_path = ""
         self.init_ui()
+
+    def set_target(self, path: str):
+        """Wire to loaded binary/bundle from main session."""
+        self._target_path = path or ""
+        if path and hasattr(self, 'output'):
+            from src.core import cert_pin_detect
+            hits = cert_pin_detect.scan_path(path)
+            if hits:
+                self.output.append(cert_pin_detect.format_report(hits))
 
     def init_ui(self):
         layout = QVBoxLayout(self)

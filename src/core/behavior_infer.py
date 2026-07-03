@@ -697,4 +697,19 @@ def format_report(flows):
     lines.append("=" * 74)
     for c in CANNOT_DETERMINE:
         lines.append(f"  • {c}")
+
+    # Append static EXTRACTED evidence from EvidenceStore when present
+    try:
+        from src.core.evidence_store import session_store, EXTRACTED
+        static = [i for i in session_store().all_items() if i.kind == EXTRACTED]
+        if static:
+            lines.append("")
+            lines.append("=" * 74)
+            lines.append("STATIC CLIENT INTEL (from binary/bundle — corroborate with live capture)")
+            lines.append("=" * 74)
+            for item in static[:25]:
+                lines.append(f"  [{item.confidence}] {item.claim}")
+    except Exception:
+        pass
+
     return "\n".join(lines)

@@ -283,11 +283,12 @@ def chromium_capture_args(port):
     ]
 
 
-def start_proxy(port, capture_file, ignore_hosts=None):
+def start_proxy(port, capture_file, ignore_hosts=None, extra_args=None):
     """Start mitmdump with the capture addon. Returns the Popen or None.
 
     `ignore_hosts` adds extra host regexes to pass through untouched (on top of
     PASSTHROUGH_HOSTS) — pinned endpoints that would otherwise break the app.
+    `extra_args` optional extra mitmdump CLI args (e.g. streaming mode).
     """
     md = mitmdump_path()
     if not md:
@@ -296,6 +297,13 @@ def start_proxy(port, capture_file, ignore_hosts=None):
     env["RE_CAPTURE_FILE"] = capture_file
     open(capture_file, "w", encoding="utf-8").close()   # truncate
     cmd = [md, "-p", str(port), "-q", "--set", "onboarding=false", "-s", addon_path()]
+    try:
+        from src.core.streaming_capture import mitm_streaming_args
+        cmd += mitm_streaming_args()
+    except ImportError:
+        cmd += ["--set", "stream_large_bodies=1048576"]
+    if extra_args:
+        cmd += list(extra_args)
     hosts = list(PASSTHROUGH_HOSTS) + list(ignore_hosts or [])
     if hosts:
         cmd += ["--ignore-hosts", "(" + "|".join(hosts) + ")"]
