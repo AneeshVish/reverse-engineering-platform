@@ -51,7 +51,7 @@ python3 -m venv .venv
 
 On launch you'll get a **Welcome screen** with two modes — **Cracking** (general
 RE workbench) and **Security** (opens straight on the Security Audit tab). Both
-open the same 14-tab workbench; pick either, then **File → Open Binary**.
+open the same **19-tab workbench**; pick either, then **File → Open Binary**.
 
 ### Optional power features
 The app runs fully without these. Each is **auto-detected at startup** and its
@@ -68,6 +68,7 @@ fails silently). Install what you need:
 | Ghidra decompilation | **Ghidra** | add `analyzeHeadless` to PATH or set `GHIDRA_HEADLESS` |
 | RetDec decompilation | **RetDec** | add `retdec-decompiler` to PATH |
 | Network capture | **mitmproxy** | `pip install mitmproxy` (provides `mitmdump`) |
+| Kernel TLS capture (Linux) | **bcc** + root | `pip install -r requirements-optional-linux.txt` |
 | Symbolic exec / emulation | angr / unicorn | `requirements-optional.txt` |
 | Dynamic instrumentation | frida | `requirements-optional.txt` |
 

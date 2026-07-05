@@ -22,6 +22,22 @@ CONF_MODERATE = "MODERATE"
 CONF_WEAK = "WEAK"
 
 
+@dataclass(frozen=True)
+class PlaintextEvent:
+    """Unified capture event from mitmproxy, Frida, or eBPF planes."""
+
+    timestamp_ns: int
+    source_plane: str       # "mitmproxy" | "frida" | "ebpf"
+    pid: int
+    uid: int
+    process_comm: str
+    target_host: str
+    target_port: int
+    payload_type: str       # "request" | "response" | "tls_send" | "tls_recv"
+    raw_payload: bytes
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class EvidenceArtifact:
     detail: str

@@ -43,7 +43,57 @@ OPTIONAL_PACKAGES = {
               "pip install -r requirements-optional.txt  (torch, transformers)"),
     "transformers": ("transformers", "Local HuggingFace AI model",
                      "pip install -r requirements-optional.txt  (transformers)"),
+    "bcc": ("bcc", "Kernel TLS capture (eBPF)",
+            "pip install bcc; Linux root required (see requirements-optional-linux.txt)"),
+    "tree_sitter": ("tree_sitter", "MCGD L1 syntax validation",
+                    "pip install tree-sitter tree-sitter-c"),
+    "pyghidra": ("pyghidra", "Ghidra static offset discovery",
+                 "pip install pyghidra; Ghidra install required"),
+    "webengine": ("PyQt6.QtWebEngineWidgets", "WebGL CFG viewer",
+                  "pip install PyQt6-WebEngine"),
 }
+
+
+def probe_ebpf_support() -> bool:
+    """True on Linux with root and importable BCC."""
+    import os
+    import sys
+    if sys.platform != "linux":
+        return False
+    if os.geteuid() != 0:
+        return False
+    try:
+        from bcc import BPF  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def probe_tree_sitter() -> bool:
+    try:
+        import tree_sitter  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def probe_webengine() -> bool:
+    import os
+    if os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen":
+        return False
+    try:
+        import PyQt6.QtWebEngineWidgets  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def probe_pyghidra() -> bool:
+    try:
+        import pyghidra  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 @functools.lru_cache(maxsize=None)

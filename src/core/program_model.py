@@ -187,6 +187,42 @@ class ProgramModel:
             for i in self.instructions
         )
 
+    def disassembly_lines(self):
+        """Formatted lines for virtual disassembly view."""
+        lines = []
+        for instr in self.instructions:
+            addr = f"{instr['address']:08x}"
+            line = f"{addr}: {instr.get('mnemonic', '')}"
+            if instr.get("op_str"):
+                line += f" {instr['op_str']}"
+            comment = instr.get("comment")
+            if comment:
+                line += f"  ; {comment}"
+            lines.append(line)
+        return lines
+
+    @property
+    def blocks(self):
+        """Map block start address → BasicBlock."""
+        return {b.start: b for b in self.basic_blocks()}
+
+    @property
+    def cfg_edges(self):
+        """List of (source_addr, target_addr) CFG edges."""
+        edges = []
+        for block in self.basic_blocks():
+            for succ in block.successors:
+                edges.append((block.start, succ))
+        return edges
+
+    def add_comment(self, address: int, comment: str):
+        """Attach a comment to the instruction at `address`."""
+        for instr in self.instructions:
+            if instr.get("address") == address:
+                instr["comment"] = comment
+                return True
+        return False
+
     def stats(self):
         blocks = self.basic_blocks()
         edges = sum(len(b.successors) for b in blocks)

@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>CFG 3D Viewer</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #12141a; overflow: hidden; font-family: "SF Mono", Menlo, Consolas, monospace; }
+    #canvas-host { width: 100%; height: 100%; position: absolute; inset: 0; }
+    #hud {
+      position: absolute; top: 10px; left: 10px; color: #9aa4b2;
+      font-size: 12px; pointer-events: none; line-height: 1.5; z-index: 5;
+    }
+    #hud.err { color: #ff8a80; }
+    #tooltip {
+      position: absolute; display: none; max-width: 420px; max-height: 340px;
+      overflow: auto; padding: 12px 14px; border-radius: 8px;
+      background: rgba(20, 24, 32, 0.96); border: 1px solid #3d4f6f;
+      color: #e8edf4; font-size: 12px; line-height: 1.45;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.45); pointer-events: none; z-index: 10;
+    }
+    #tooltip.pinned { pointer-events: auto; border-color: #ff9800; }
+    #tooltip h3 { margin: 0 0 8px; font-size: 13px; color: #4fc3f7; }
+    #tooltip .meta { color: #9aa4b2; margin-bottom: 8px; }
+    #tooltip pre {
+      margin: 0; white-space: pre-wrap; word-break: break-word;
+      background: #0d1016; padding: 8px; border-radius: 4px; font-size: 11px;
+    }
+    #tooltip .succ { margin-top: 8px; color: #81c784; }
+    #tooltip .hint { margin-top: 6px; font-size: 10px; color: #666; }
+  </style>
+</head>
+<body>
+  <div id="canvas-host"></div>
+  <div id="hud">Loading CFG viewer…</div>
+  <div id="tooltip"></div>
+
+  <script src="vendor/three.min.js"></script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script>
+    const host = document.getElementById("canvas-host");
+    const tooltip = document.getElementById("tooltip");
+    const hud = document.getElementById("hud");
+
+    let nodes = [], edges = [], nodeMeshes = {}, graphData = {};
+    let hovered = null, pinned = null;
+    let scene, camera, renderer, edgeGroup, nodeGroup, orbit;
+
+    function setHud(msg, isErr) {
+      hud.innerHTML = msg;
+      hud.classList.toggle("err", !!isErr);
+    }
+
+    window.__cfgError = function (msg) {
+      setHud("CFG error: " + msg, true);
+    };
+
+    /* --- 3D layout (inline — Web Workers fail on file:// in QWebEngine) --- */
+    function layout3D(nodeList, edgeList, spread) {
+      spread = spread || 400;
+      const positions = {};
+      const n = nodeList.length || 1;
+      nodeList.forEach((node, i) => {
+        const phi = Math.acos(-1 + (2 * i) / n);
+        const theta = Math.sqrt(n * Math.PI) * phi;
+        const r = spread * 0.5;
+        positions[node.key] = {
+          x: r * Math.cos(theta) * Math.sin(phi),
+          y: r * Math.sin(theta) * Math.sin(phi),
+          z: r * Math.cos(phi),
+        };
+      });
+      for (let iter = 0; iter < 100; iter++) {
+        for (let i = 0; i < nodeList.length; i++) {
+          for (let j = i + 1; j < nodeList.length; j++) {
+            const a = positions[nodeList[i].key];
+            const b = positions[nodeList[j].key];
+            let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+            let d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+            const rep = 12000 / (d * d);
+            a.x += (dx / d) * rep; a.y += (dy / d) * rep; a.z += (dz / d) * rep;
+            b.x -= (dx / d) * rep; b.y -= (dy / d) * rep; b.z -= (dz / d) * rep;
+          }
+        }
+        for (const e of edgeList) {
+          const a = positions[e.source], b = positions[e.target];
+          if (!a || !b) continue;
+          let dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+          let d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+          const att = (d - 60) * 0.015;
+          a.x += (dx / d) * att; a.y += (dy / d) * att; a.z += (dz / d) * att;
+          b.x -= (dx / d) * att; b.y -= (dy / d) * att; b.z -= (dz / d) * att;
+        }
+      }
+      return positions;
+    }
+
+    function initThree() {
+      if (typeof THREE === "undefined") {
+        throw new Error("Three.js failed to load (vendor/three.min.js)");
+      }
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x12141a);
+      scene.fog = new THREE.Fog(0x12141a, 400, 2500);
+
+      camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 8000);
+      camera.position.set(0, 0, 500);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio || 1);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      host.appendChild(renderer.domElement);
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+      const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+      dir.position.set(300, 400, 500);
+      scene.add(dir);
+      scene.add(new THREE.GridHelper(800, 20, 0x333344, 0x222233));
+
+      edgeGroup = new THREE.Group();
+      nodeGroup = new THREE.Group();
+      scene.add(edgeGroup);
+      scene.add(nodeGroup);
+
+      orbit = { target: new THREE.Vector3(), phi: Math.PI / 2.2, theta: 0.4, radius: 500,
+                dragging: false, panning: false, lastX: 0, lastY: 0 };
+      updateCamera();
+      setupControls();
+      animate();
+    }
+
+    function updateCamera() {
+      const { target, phi, theta, radius } = orbit;
+      camera.position.x = target.x + radius * Math.sin(phi) * Math.sin(theta);
+      camera.position.y = target.y + radius * Math.cos(phi);
+      camera.position.z = target.z + radius * Math.sin(phi) * Math.cos(theta);
+      camera.lookAt(target);
+    }
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    function setupControls() {
+      renderer.domElement.addEventListener("contextmenu", e => e.preventDefault());
+      renderer.domElement.addEventListener("mousedown", e => {
+        orbit.lastX = e.clientX; orbit.lastY = e.clientY;
+        if (e.button === 2 || e.button === 1) orbit.panning = true;
+        else orbit.dragging = true;
+      });
+      window.addEventListener("mouseup", () => { orbit.dragging = false; orbit.panning = false; });
+      window.addEventListener("mousemove", e => {
+        const dx = e.clientX - orbit.lastX, dy = e.clientY - orbit.lastY;
+        orbit.lastX = e.clientX; orbit.lastY = e.clientY;
+        if (orbit.dragging) {
+          orbit.theta -= dx * 0.005;
+          orbit.phi = Math.max(0.05, Math.min(Math.PI - 0.05, orbit.phi + dy * 0.005));
+          updateCamera();
+        } else if (orbit.panning) {
+          const pan = new THREE.Vector3();
+          const right = new THREE.Vector3();
+          camera.getWorldDirection(pan);
+          right.crossVectors(pan, camera.up).normalize();
+          pan.crossVectors(camera.up, right).normalize();
+          orbit.target.addScaledVector(right, -dx * 0.4);
+          orbit.target.addScaledVector(pan, dy * 0.4);
+          updateCamera();
+        } else {
+          onPointerMove(e);
+        }
+      });
+      renderer.domElement.addEventListener("wheel", e => {
+        orbit.radius = Math.max(80, Math.min(3000, orbit.radius + e.deltaY * 0.35));
+        updateCamera();
+      }, { passive: true });
+      renderer.domElement.addEventListener("click", onClick);
+      window.addEventListener("keydown", e => {
+        if (e.key === "Escape") {
+          if (pinned) setNodeHighlight(nodeMeshes[pinned], "default");
+          hideTooltip(true);
+          hovered = null;
+        }
+      });
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    }
+
+    function setNodeHighlight(mesh, mode) {
+      if (!mesh) return;
+      const mat = mesh.material;
+      if (mode === "hover") { mat.color.setHex(0xffeb3b); mat.emissive.setHex(0x554400); }
+      else if (mode === "pinned") { mat.color.setHex(0xff9800); mat.emissive.setHex(0x663300); }
+      else { mat.color.setHex(0x4fc3f7); mat.emissive.setHex(0x113344); }
+    }
+
+    function formatTooltip(node, isPinned) {
+      const a = node.attributes || {};
+      const succ = (a.successors || []).join(", ") || "none (return / exit)";
+      return `<h3>Basic block ${a.address || node.key}</h3>`
+        + `<div class="meta">${a.instruction_count || "?"} instructions · successors: ${succ}</div>`
+        + `<pre>${escapeHtml(a.disassembly || a.label || "")}</pre>`
+        + (a.comment ? `<div class="succ">${escapeHtml(a.comment)}</div>` : "")
+        + `<div class="hint">${isPinned ? "Click elsewhere or Esc to unpin" : "Click to pin this tooltip"}</div>`;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    }
+
+    function showTooltip(node, x, y, pinnedMode) {
+      tooltip.innerHTML = formatTooltip(node, pinnedMode);
+      tooltip.style.display = "block";
+      tooltip.classList.toggle("pinned", pinnedMode);
+      const pad = 14;
+      let left = x + pad, top = y + pad;
+      if (left + tooltip.offsetWidth > window.innerWidth - 8) left = x - tooltip.offsetWidth - pad;
+      if (top + tooltip.offsetHeight > window.innerHeight - 8) top = y - tooltip.offsetHeight - pad;
+      tooltip.style.left = Math.max(8, left) + "px";
+      tooltip.style.top = Math.max(8, top) + "px";
+    }
+
+    function hideTooltip(unpin) {
+      if (pinned && !unpin) return;
+      tooltip.style.display = "none";
+      tooltip.classList.remove("pinned");
+      if (unpin) {
+        if (pinned) setNodeHighlight(nodeMeshes[pinned], "default");
+        pinned = null;
+      }
+    }
+
+    function pickNode(clientX, clientY) {
+      mouse.x = (clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObjects(nodeGroup.children, false);
+      return hits.length ? hits[0].object : null;
+    }
+
+    function onPointerMove(e) {
+      if (pinned) return;
+      const mesh = pickNode(e.clientX, e.clientY);
+      const key = mesh ? mesh.userData.key : null;
+      if (hovered && hovered !== pinned) setNodeHighlight(nodeMeshes[hovered], "default");
+      hovered = key;
+      if (key && graphData[key]) {
+        setNodeHighlight(mesh, "hover");
+        showTooltip(graphData[key], e.clientX, e.clientY, false);
+        renderer.domElement.style.cursor = "pointer";
+      } else {
+        hideTooltip(false);
+        renderer.domElement.style.cursor = "grab";
+      }
+    }
+
+    function onClick(e) {
+      const mesh = pickNode(e.clientX, e.clientY);
+      if (!mesh) {
+        hideTooltip(true);
+        if (hovered) setNodeHighlight(nodeMeshes[hovered], "default");
+        hovered = null;
+        return;
+      }
+      const key = mesh.userData.key;
+      if (pinned === key) {
+        hideTooltip(true);
+        setNodeHighlight(mesh, hovered === key ? "hover" : "default");
+        return;
+      }
+      if (pinned) setNodeHighlight(nodeMeshes[pinned], "default");
+      pinned = key;
+      setNodeHighlight(mesh, "pinned");
+      showTooltip(graphData[key], e.clientX, e.clientY, true);
+    }
+
+    function clearGroup(g) {
+      while (g.children.length) {
+        const c = g.children[0];
+        g.remove(c);
+        if (c.geometry) c.geometry.dispose();
+        if (c.material) c.material.dispose();
+      }
+    }
+
+    function buildGraph(graphObj, positions) {
+      clearGroup(nodeGroup);
+      clearGroup(edgeGroup);
+      nodeMeshes = {};
+      graphData = {};
+      nodes = graphObj.nodes || [];
+      edges = graphObj.edges || [];
+      nodes.forEach(n => { graphData[n.key] = n; });
+
+      const nodeRadius = Math.max(4, Math.min(10, 200 / Math.sqrt(nodes.length || 1)));
+
+      nodes.forEach(n => {
+        const p = positions[n.key] || { x: 0, y: 0, z: 0 };
+        const geo = new THREE.SphereGeometry(nodeRadius, 16, 16);
+        const mat = new THREE.MeshPhongMaterial({
+          color: 0x4fc3f7, emissive: 0x113344, shininess: 80,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(p.x, p.y, p.z);
+        mesh.userData.key = n.key;
+        nodeGroup.add(mesh);
+        nodeMeshes[n.key] = mesh;
+      });
+
+      edges.forEach(e => {
+        const a = positions[e.source], b = positions[e.target];
+        if (!a || !b) return;
+        const geo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(a.x, a.y, a.z),
+          new THREE.Vector3(b.x, b.y, b.z),
+        ]);
+        const mat = new THREE.LineBasicMaterial({ color: 0x6688aa, transparent: true, opacity: 0.75 });
+        edgeGroup.add(new THREE.Line(geo, mat));
+      });
+
+      const box = new THREE.Box3().setFromObject(nodeGroup);
+      if (!box.isEmpty()) {
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3()).length();
+        orbit.target.copy(center);
+        orbit.radius = Math.max(150, size * 1.4);
+        updateCamera();
+      }
+
+      setHud(`${nodes.length} basic blocks · ${edges.length} edges<br/>`
+        + "Drag rotate · Scroll zoom · Right-drag pan · Hover/click nodes");
+    }
+
+    let graphLoaded = false;
+
+    window.__loadGraph = function (graphObj) {
+      try {
+        if (graphLoaded) return;
+        if (!scene) initThree();
+        if (!graphObj || !(graphObj.nodes || []).length) {
+          setHud("No basic blocks to display.", true);
+          return;
+        }
+        graphLoaded = true;
+        setHud(`Layout ${graphObj.nodes.length} blocks in 3D…`);
+        const positions = layout3D(graphObj.nodes, graphObj.edges || [], 500);
+        buildGraph(graphObj, positions);
+      } catch (err) {
+        setHud("Render error: " + err.message, true);
+        console.error(err);
+      }
+    };
+
+    function animate() {
+      requestAnimationFrame(animate);
+      if (renderer && scene && camera) renderer.render(scene, camera);
+    }
+
+    /* Bootstrap Three.js immediately; graph data injected from Python on loadFinished. */
+    try {
+      initThree();
+      setHud("Waiting for graph data…");
+    } catch (err) {
+      setHud("Init error: " + err.message, true);
+    }
+
+    /* QWebChannel fallback if Python injection fails */
+    function tryWebChannel() {
+      if (typeof qt === "undefined" || !qt.webChannelTransport) {
+        setTimeout(tryWebChannel, 100);
+        return;
+      }
+      new QWebChannel(qt.webChannelTransport, function (channel) {
+        if (channel.objects.py_bridge) {
+          window.__loadGraph(JSON.parse(channel.objects.py_bridge.get_graph_data()));
+        }
+      });
+    }
+    setTimeout(tryWebChannel, 200);
+  </script>
+</body>
+</html>

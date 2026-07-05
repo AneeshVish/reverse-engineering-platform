@@ -899,6 +899,13 @@ class MainWindow(QMainWindow):
                     w.setToolTip("Decompiler backend unavailable — install Ghidra or RetDec (see ROADMAP/README)")
         # Network capture needs mitmproxy.
         gate(getattr(getattr(self, "network_capture_panel", None), "start_btn", None), "mitmproxy")
+        ncp = getattr(self, "network_capture_panel", None)
+        if ncp is not None and hasattr(ncp, "kernel_cb"):
+            from src.core import capabilities
+            if not capabilities.probe_ebpf_support():
+                ncp.kernel_cb.setEnabled(False)
+                ncp.kernel_cb.setToolTip(
+                    "Kernel TLS capture unavailable — Linux root + bcc required")
 
     def launch_security_mode(self):
         """Enter the main workbench focused on the Security Audit workflow.
@@ -1524,8 +1531,8 @@ class MainWindow(QMainWindow):
         # Consolas/Segoe overrides that break on macOS).
         self._disassembly_tab = QWidget()
         disassembly_layout = QVBoxLayout(self._disassembly_tab)
-        self.disassembly_view = QTextEdit()
-        self.disassembly_view.setReadOnly(True)
+        from src.gui.disasm_view import DisasmView
+        self.disassembly_view = DisasmView()
         disassembly_layout.addWidget(self.disassembly_view)
         self.download_disassembly_btn = QPushButton("Download Disassembly")
         self.download_disassembly_btn.setIcon(qicon("fa5s.download"))
@@ -1831,24 +1838,24 @@ class MainWindow(QMainWindow):
         try:
             addr_text = item.text(1)
             addr = int(addr_text, 16)
-            from PyQt6.QtGui import QTextCursor
-            doc = self.disassembly_view
-            # Disassembly lines start with the 8-hex address; find that line.
-            target = f"{addr:08x}:"
-            text = doc.toPlainText()
-            idx = text.find(target)
-            if idx < 0:
-                # Try without zero-padding width assumption.
-                target2 = f"{addr:x}:"
-                idx = text.find(target2)
-            if idx >= 0:
-                cursor = doc.textCursor()
-                cursor.setPosition(idx)
-                doc.setTextCursor(cursor)
-                doc.ensureCursorVisible()
+            if hasattr(self.disassembly_view, 'scroll_to_address'):
+                self.disassembly_view.scroll_to_address(addr)
                 self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
             else:
-                if hasattr(self, 'log_view'):
+                from PyQt6.QtGui import QTextCursor
+                doc = self.disassembly_view
+                target = f"{addr:08x}:"
+                text = doc.toPlainText()
+                idx = text.find(target)
+                if idx < 0:
+                    idx = text.find(f"{addr:x}:")
+                if idx >= 0:
+                    cursor = doc.textCursor()
+                    cursor.setPosition(idx)
+                    doc.setTextCursor(cursor)
+                    doc.ensureCursorVisible()
+                    self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
+                elif hasattr(self, 'log_view'):
                     self.log_view.append(f"[INFO] Address {addr_text} not in the disassembled range.")
         except Exception as e:
             if hasattr(self, 'log_view'):
@@ -1858,12 +1865,17 @@ class MainWindow(QMainWindow):
         """Jump the Disassembly view to a virtual address (used by Security Audit)."""
         try:
             addr = int(addr)
+            if hasattr(self.disassembly_view, 'scroll_to_address'):
+                self.disassembly_view.scroll_to_address(addr)
+                self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
+                return
             doc = self.disassembly_view
             text = doc.toPlainText()
             idx = text.find(f"{addr:08x}:")
             if idx < 0:
                 idx = text.find(f"{addr:x}:")
             if idx >= 0:
+                from PyQt6.QtGui import QTextCursor
                 cursor = doc.textCursor()
                 cursor.setPosition(idx)
                 doc.setTextCursor(cursor)
@@ -1876,36 +1888,27 @@ class MainWindow(QMainWindow):
                 self.log_view.append(f"[WARN] Navigate failed: {e}")
 
     def show_cfg_viewer(self):
-        """Show the control flow graph for the current disassembly."""
+        """Show interactive 3D control-flow graph (WebEngine) or matplotlib fallback."""
         try:
-            from src.gui.cfg_viewer import CFGViewer
-            # Prefer the structured program model (real addresses + branch edges).
-            instructions = []
             model = getattr(self, 'program_model', None)
+            instructions = []
             if model is not None and model.instructions:
                 instructions = model.instructions
-            elif hasattr(self.disassembly_view, 'table'):
-                # Fallback: reconstruct from the disassembly table.
-                table = self.disassembly_view.table
-                for row in range(table.rowCount()):
-                    address_item = table.item(row, 0)
-                    mnemonic_item = table.item(row, 2)
-                    operands_item = table.item(row, 3)
-                    if address_item and mnemonic_item and operands_item:
-                        try:
-                            address = int(address_item.text(), 16)
-                        except Exception:
-                            address = row
-                        instructions.append({
-                            'address': address,
-                            'mnemonic': mnemonic_item.text(),
-                            'op_str': operands_item.text(),
-                        })
             if not instructions:
                 self.log_view.append("[WARN] No instructions to visualize for CFG.")
                 return
+            from src.gui.cfg_web_viewer import CFGWebViewer, available as web_cfg
+            if web_cfg():
+                node_count = len(model.basic_blocks()) if model else 0
+                self.cfg_viewer = CFGWebViewer(model)
+                self.cfg_viewer.setWindowTitle(
+                    f"Control Flow Graph — 3D ({node_count} blocks)")
+                self.cfg_viewer.resize(1100, 780)
+                self.cfg_viewer.show()
+                return
+            from src.gui.cfg_viewer import CFGViewer
             self.cfg_viewer = CFGViewer(instructions)
-            self.cfg_viewer.setWindowTitle("Control Flow Graph (CFG)")
+            self.cfg_viewer.setWindowTitle("Control Flow Graph (CFG — 2D fallback)")
             self.cfg_viewer.show()
         except Exception as e:
             self.log_view.append(f"[ERROR] Failed to show CFG: {e}")
@@ -1992,6 +1995,28 @@ class MainWindow(QMainWindow):
             self.log_view.append(f"[INFO] Full decompilation complete via {engine}.")
         else:
             self.log_view.append("[WARN] Full decompilation produced no usable output.")
+        if code.strip():
+            self._run_mcgd_validation(code)
+
+    def _run_mcgd_validation(self, raw_c: str):
+        """Run MCGD L1-L3 pipeline on decompiled output (background-friendly MVP)."""
+        try:
+            from src.core.mcgd.orchestrator import MCGDOrchestrator
+            binary = getattr(self, 'current_file_path', '') or ''
+            orch = MCGDOrchestrator(original_binary=binary)
+            result = orch.run(raw_c)
+            badge = "Verified re-executable" if result.verified else "MCGD incomplete"
+            self.log_view.append(
+                f"[MCGD] {badge} — reward={result.final_reward:.2f}, "
+                f"iterations={len(result.iterations)}")
+            for it in result.iterations:
+                self.log_view.append(
+                    f"  iter {it.iteration}: L1={it.l1_ok} L2={it.l2_ok} "
+                    f"L3={it.l3_pass_rate:.0%} R={it.reward.total:.2f}")
+            if result.verified and len(result.code) < MAX_DISPLAY_SIZE:
+                self.source_code_view.setPlainText(result.code)
+        except Exception as e:
+            self.log_view.append(f"[WARN] MCGD validation: {e}")
 
     def on_decompile_complete(self, results):
         """AI/engine decompilation finished.
@@ -2126,16 +2151,18 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # Show plain disassembly in the format 'address: mnemonic operands'
-        disasm_lines = []
-        for instr in instructions:
-            addr = f"{instr['address']:08x}"
-            line = f"{addr}: {instr['mnemonic']}"
-            if instr['op_str']:
-                line += f" {instr['op_str']}"
-            disasm_lines.append(line)
-        self.disassembly_view.setPlainText('\n'.join(disasm_lines))
-        self._apply_line_spacing(self.disassembly_view)
+        # Show disassembly via virtual list model (no line cap).
+        if getattr(self, 'program_model', None) and self.program_model.instructions:
+            self.disassembly_view.set_program_model(self.program_model)
+        else:
+            disasm_lines = []
+            for instr in instructions:
+                addr = f"{instr['address']:08x}"
+                line = f"{addr}: {instr['mnemonic']}"
+                if instr['op_str']:
+                    line += f" {instr['op_str']}"
+                disasm_lines.append(line)
+            self.disassembly_view.setPlainText('\n'.join(disasm_lines))
 
         # --- Endpoint Detection + Electron source + Network intelligence ---
         self._run_endpoint_and_network_analysis()
@@ -2204,6 +2231,11 @@ class MainWindow(QMainWindow):
                     f"[MODEL] {s['instructions']} instructions, "
                     f"{s['basic_blocks']} basic blocks, {s['edges']} CFG edges."
                 )
+            try:
+                from src.api import mcp_server
+                mcp_server.set_program_model(self.program_model)
+            except Exception:
+                pass
         except Exception as e:
             self.program_model = None
             if hasattr(self, 'log_view'):
@@ -2265,4 +2297,15 @@ class MainWindow(QMainWindow):
             self.decompile_worker.decompile_complete.connect(self.on_decompile_complete)
             self.decompile_worker.progress_update.connect(self.update_progress)
             self.decompile_worker.start()
+
+        # Plugin hooks — analysis pipeline integration.
+        try:
+            if self.current_file_path:
+                self.plugin_manager.execute_hook('on_binary_load', self.current_file_path)
+            self.plugin_manager.execute_hook('on_disassembly', results)
+            self.plugin_manager.execute_hook('on_analysis', results)
+        except Exception as e:
+            if hasattr(self, 'log_view'):
+                self.log_view.append(f"[WARN] Plugin hooks: {e}")
+
         self.progress_bar.setVisible(False)

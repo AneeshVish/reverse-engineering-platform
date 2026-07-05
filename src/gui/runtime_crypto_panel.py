@@ -194,6 +194,14 @@ class RuntimeCryptoPanel(QWidget):
 
     def _append_event(self, evt):
         self.output.append(rc.format_event(evt) + "\n")
+        try:
+            from src.core.adapters.frida_adapter import frida_event_to_plaintext
+            from src.core.plaintext_bus import get_bus
+            pe = frida_event_to_plaintext(evt)
+            if pe:
+                get_bus().ingest(pe)
+        except Exception:
+            pass
 
     def _stop(self):
         if self._cap is not None:

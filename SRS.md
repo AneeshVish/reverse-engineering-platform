@@ -99,8 +99,12 @@ The platform is a standalone desktop application, built primarily with Python an
 - **Performance:** Analysis and decompilation should complete within a reasonable time for typical binaries (<5 min for <10MB files).
 - **Reliability:** The application should handle errors gracefully and not crash on invalid input.
 - **Usability:** The GUI should be intuitive and accessible to users with basic security knowledge.
-- **Portability:** Should run on modern Windows systems; Linux/Mac support is a future goal.
+- **Portability:** Runs on macOS, Linux, and Windows (Python 3.11/3.12 primary).
 - **Security:** No data should be sent to external servers unless explicitly required by the user (e.g., for AI decompilation or threat intelligence).
+- **Virtual UI:** Disassembly uses O(1) virtual list model (`VirtualDisasmModel`); no hard line cap for disassembly view.
+- **MCGD validation:** Decompilation may pass L1 (syntax), L2 (compile), L3 (differential exec) before showing "Verified re-executable".
+- **Dual TLS plane:** mitmproxy (userspace proxy), Frida (userspace hooks), eBPF (Linux kernel uprobes, root required) — unified via `PlaintextEvent` bus.
+- **eBPF requirement:** Kernel capture requires Linux, root/CAP_BPF, and BCC; capability-gated in UI.
 
 ### 3.3 External Interface Requirements
 - **File Input:** Executables, DLLs, scripts, and other binary formats.
@@ -118,10 +122,11 @@ The platform is a standalone desktop application, built primarily with Python an
 - Always comply with local laws and institutional policies.
 
 ### 4.2 Future Enhancements
-- Support for additional operating systems (Linux, macOS)
 - Advanced memory analysis and in-memory key extraction
-- More sophisticated AI/LLM decompilation models
-- Plugin system for custom analyses
+- Agent Studio / full Skill Marketplace (deferred; signed plugins first)
+- SARIF export from security audit
+
+See [docs/ARCHITECTURE_TARGET.md](docs/ARCHITECTURE_TARGET.md) for the full evolution roadmap.
 
 ### 4.3 Credits
 - Built with PyQt6, mitmproxy, LIEF, Capstone, and open-source LLMs

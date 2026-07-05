@@ -23,6 +23,8 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core import pii_classify, tracker_list, traffic_capture as tc
+from src.core.adapters.mitm_adapter import flow_to_plaintext_events
+from src.core.plaintext_bus import get_bus, subscribe
 from src.gui.icons import icon as qicon
 
 
@@ -244,6 +246,8 @@ class NetworkCapturePanel(QWidget):
         self._proof_cache = {}
         self._proof_workers = []
         self._intel = None
+        self._plaintext_events = []
+        self._ebpf_sniffer = None
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tail)
         self._build_ui()
@@ -282,6 +286,21 @@ class NetworkCapturePanel(QWidget):
             "Capture ALL apps system-wide (admin once; reverts on Stop; "
             "pinned apps still won't decrypt)")
         layout.addWidget(self.system_cb)
+
+        self.kernel_cb = QCheckBox(
+            "Kernel TLS capture (Linux root + BCC — complements proxy for pinned native apps)")
+        layout.addWidget(self.kernel_cb)
+        try:
+            from src.core import capabilities
+            if not capabilities.probe_ebpf_support():
+                self.kernel_cb.setEnabled(False)
+                self.kernel_cb.setToolTip(
+                    "Kernel TLS capture unavailable — Linux root + bcc required "
+                    "(see requirements-optional-linux.txt)")
+        except Exception:
+            self.kernel_cb.setEnabled(False)
+
+        subscribe(self._on_plaintext_bus)
 
         # One adaptive primary action + small Stop + secondary test.
         row2 = QHBoxLayout()
@@ -346,6 +365,33 @@ class NetworkCapturePanel(QWidget):
         self.secrets_view.setReadOnly(True)
         self.secrets_view.setMaximumHeight(150)
         layout.addWidget(self.secrets_view)
+
+        tls_label = QLabel("Unified TLS Plane (Frida / eBPF plaintext)")
+        tls_label.setObjectName("Heading")
+        layout.addWidget(tls_label)
+        self.tls_plane_view = QTextEdit()
+        self.tls_plane_view.setReadOnly(True)
+        self.tls_plane_view.setMaximumHeight(120)
+        self.tls_plane_view.setPlaceholderText(
+            "TLS plaintext from Frida or eBPF appears here (mitmproxy flows in the table above).")
+        layout.addWidget(self.tls_plane_view)
+
+    def _on_plaintext_bus(self, event):
+        """Receive PlaintextEvents from any plane (Frida, eBPF — mitm ingested in _add_flow)."""
+        if event.source_plane == "mitmproxy":
+            return
+        self._ingest_plaintext_ui(event)
+
+    def _ingest_plaintext_ui(self, event):
+        self._plaintext_events.append(event)
+        if len(self._plaintext_events) > 200:
+            self._plaintext_events.pop(0)
+        preview = event.raw_payload[:200].decode("utf-8", errors="replace").replace("\n", " ")
+        line = (f"[{event.source_plane}] pid={event.pid} {event.payload_type} "
+                f"{event.target_host}:{event.target_port} — {preview}")
+        self.tls_plane_view.append(line)
+        self.tls_plane_view.verticalScrollBar().setValue(
+            self.tls_plane_view.verticalScrollBar().maximum())
 
     def set_intelligence_panel(self, panel):
         """Attach the Network Intelligence tab so analytics refresh with capture."""
@@ -489,6 +535,8 @@ class NetworkCapturePanel(QWidget):
         if self._proxy_proc is None:
             self.status.setText("Failed to start the interceptor.")
             return
+        if self.kernel_cb.isChecked():
+            self._start_ebpf()
         self._offset = 0
         self._timer.start(700)
         self.start_btn.setEnabled(False)
@@ -562,8 +610,31 @@ class NetworkCapturePanel(QWidget):
         QTimer.singleShot(800, lambda: tc.run_test_request(self._port))
         self.status.setText("Sent a test HTTPS request through the interceptor…")
 
+    def _start_ebpf(self):
+        try:
+            from src.core.ebpf_capture.sniffer import eBPFSniffer
+            from src.core.adapters.ebpf_adapter import ebpf_event_to_plaintext
+
+            def _on_ebpf(rec):
+                pe = ebpf_event_to_plaintext(rec)
+                if pe:
+                    get_bus().ingest(pe)
+
+            self._ebpf_sniffer = eBPFSniffer(on_event=_on_ebpf)
+            if not self._ebpf_sniffer.start():
+                self.output_hint(
+                    "Kernel TLS capture could not start — need Linux, root, and bcc.")
+        except Exception as e:
+            self.output_hint(f"Kernel TLS capture error: {e}")
+
     def stop_capture(self):
         self._timer.stop()
+        if self._ebpf_sniffer is not None:
+            try:
+                self._ebpf_sniffer.stop()
+            except Exception:
+                pass
+            self._ebpf_sniffer = None
         # Revert the system proxy first so networking is always restored.
         if self._system_service:
             try:
@@ -682,6 +753,8 @@ class NetworkCapturePanel(QWidget):
             rec = streaming_capture.enrich_flow(rec)
         except Exception:
             pass
+        for pe in flow_to_plaintext_events(rec):
+            get_bus().ingest(pe)
         self.flows.append(rec)
         host = rec.get("host", "")
         tracker = tracker_list.classify(host)

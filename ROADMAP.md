@@ -153,3 +153,20 @@ navigable, cited explanation of its major functions.
 
 Deliver that, and you have a tool that is honest, runs everywhere, and already
 shows the AI differentiator — a credible "best-in-class trajectory" story for a company.
+
+---
+
+## Evolution phases (architecture plan — merged timeline)
+
+Aligned with [docs/ARCHITECTURE_TARGET.md](docs/ARCHITECTURE_TARGET.md):
+
+| Phase | Months | Focus |
+|-------|--------|-------|
+| **A** | 1–4 | PlaintextEvent bus, Frida↔Network, mitm hardening, eBPF Linux spike |
+| **B** | 5–8 | ProgramModel canonical, virtual disasm, WebGL CFG, plugin hooks |
+| **C** | 9–14 | MCGD L1–L3 (tree-sitter, gcc, sandbox), ExeBench harness |
+| **D** | 15–18 | Unicorn stack strings, PyGhidra offsets, MCP server, eBPF production |
+| **E** | 19–24 | Git sync UI, SARIF export, signed plugins |
+
+These extend (not replace) Phases 1–5 above. Week-based Phase 1 items remain the
+immediate engineering baseline; month-based evolution phases track next-gen features.
