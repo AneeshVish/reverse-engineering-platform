@@ -5,7 +5,16 @@ For apps the tool launches (Electron/Node/Python/CLI/curl), pointing their TLS
 trust at the mitmproxy CA via env vars means we decrypt their HTTPS WITHOUT any
 system-wide proxy or certificate install. Native apps that pin certificates or
 ignore the env proxy won't be captured this way (honest limitation).
+
+Dual-plane capture: mitmproxy (this module) for launched Electron/CLI apps;
+Frida/eBPF for certificate-pinned native binaries — see PlaintextEvent bus.
 """
+
+PINNING_LIMITS = (
+    "Apps that pin certificates at the application layer (WhatsApp, Signal, many "
+    "banking apps) cannot be decrypted via proxy alone. Use Runtime Crypto (Frida) "
+    "or Kernel TLS capture (eBPF on Linux with root)."
+)
 
 import os
 import shutil

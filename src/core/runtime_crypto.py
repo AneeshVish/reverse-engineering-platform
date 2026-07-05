@@ -183,6 +183,10 @@ class RuntimeCryptoCapture:
             except Exception:
                 pass
         self._wire(session, pid=pid)
+        try:
+            load_unpin_scripts(session)
+        except Exception:
+            pass
         self._device.resume(pid)
         return pid
 
@@ -219,6 +223,26 @@ class RuntimeCryptoCapture:
                 pass
         self._scripts = []
         self._sessions = []
+
+
+def load_unpin_scripts(session, assets_dir=None):
+    """Load OkHttp/TrustKit/TrustManager unpin scripts from assets/frida/."""
+    import os
+    if assets_dir is None:
+        from src.utils.paths import project_root
+        assets_dir = os.path.join(project_root(), "assets", "frida")
+    names = ("okhttp_unpin.js", "trustkit_unpin.js", "trustmanager_override.js")
+    loaded = []
+    for name in names:
+        path = os.path.join(assets_dir, name)
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    session.create_script(f.read()).load()
+                loaded.append(name)
+            except Exception:
+                pass
+    return loaded
 
 
 def _hexdump(byte_list):

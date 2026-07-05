@@ -1,0 +1,16 @@
+// BoringSSL custom verify hook — offset injected by pyghidra_analyzer.
+// Placeholder: {{SSL_VERIFY_OFFSET}}
+(function () {
+  var base = Module.findBaseAddress('{{MODULE_NAME}}') || ptr(0);
+  var offset = {{SSL_VERIFY_OFFSET}};
+  if (base.isNull() || offset < 0) {
+    console.log('[boringssl] offset not configured');
+    return;
+  }
+  var target = base.add(offset);
+  Interceptor.attach(target, {
+    onEnter: function (args) { this.skip = true; },
+    onLeave: function (ret) { if (this.skip) ret.replace(0); }
+  });
+  console.log('[boringssl] hooked verify at ' + target);
+})();

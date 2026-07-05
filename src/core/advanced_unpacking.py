@@ -110,6 +110,18 @@ class AdvancedUnpacker:
         self.logger.info(f"[STUB] Would run symbolic execution for {file_path}")
         return None
 
+    def extract_stack_strings(self, code_bytes: bytes, address: int = 0x1000, program_model=None):
+        """Unicorn emulation for stack-constructed strings."""
+        try:
+            from src.core.emulator.stack_extractor import inject_into_program_model, extract_stack_strings
+            text = extract_stack_strings(code_bytes, address)
+            if program_model and text:
+                inject_into_program_model(program_model, address, code_bytes)
+            return text or None
+        except Exception as e:
+            self.logger.error(f"Stack string extraction failed: {e}")
+            return None
+
     def brute_force_xor(self, data):
         """Try all single-byte XOR keys to brute-force decrypt simple encrypted blobs. For each candidate, attempt to detect format and decompile/disassemble if possible."""
         import binascii

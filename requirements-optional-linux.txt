@@ -1,0 +1,4 @@
+# Linux-only optional dependencies for kernel TLS capture (eBPF/BCC).
+# Install: pip install -r requirements-optional-linux.txt
+# Requires: Linux, root/CAP_BPF, kernel headers matching running kernel.
+bcc>=0.29.0; sys_platform == "linux"
