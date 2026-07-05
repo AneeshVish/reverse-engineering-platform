@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: RevENG-macos.zip
+            archive: |
+              cd dist && zip -r RevENG-macos.zip RevENG.app
+          - os: ubuntu-latest
+            artifact: RevENG-linux.tar.gz
+            archive: |
+              cd dist && tar -czf RevENG-linux.tar.gz RevENG
+          - os: windows-latest
+            artifact: RevENG-windows.zip
+            archive: |
+              powershell Compress-Archive -Path dist/RevENG -DestinationPath dist/RevENG-windows.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-packaging.txt
+
+      - name: Build standalone app
+        run: pyinstaller --noconfirm packaging/reveng.spec
+
+      - name: Package archive
+        shell: bash
+        run: ${{ matrix.archive }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    # Only publish a Release for tag pushes (v*). Manual runs still build and
+    # upload the three per-OS artifacts, but skip release creation (no tag).
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true

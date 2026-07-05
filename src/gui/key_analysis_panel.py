@@ -1,10 +1,7 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QTextEdit, QFileDialog, QLabel, QHBoxLayout, QLineEdit)
 from PyQt6.QtCore import Qt
-import subprocess
-import sys
-import os
 
-from src.utils.paths import script_path
+from src.utils.script_runner import run_script
 
 class KeyAnalysisPanel(QWidget):
     def __init__(self, parent=None):
@@ -75,16 +72,14 @@ class KeyAnalysisPanel(QWidget):
         target, _ = QFileDialog.getOpenFileName(self, "Select File or Directory to Scan")
         if not target:
             return
-        cmd = [sys.executable, script_path("find_key_strings"), target]
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        proc = run_script("find_key_strings", [target])
         self.output.setPlainText(proc.stdout + proc.stderr)
 
     def dump_memory_keys(self):
         dump_path, _ = QFileDialog.getOpenFileName(self, "Select Memory Dump File")
         if not dump_path:
             return
-        cmd = [sys.executable, script_path("dump_memory_keys"), dump_path]
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        proc = run_script("dump_memory_keys", [dump_path])
         self.output.setPlainText(proc.stdout + proc.stderr)
 
     def dictionary_attack(self):
@@ -95,10 +90,10 @@ class KeyAnalysisPanel(QWidget):
         if not input_path or not wordlist_path:
             self.output.setPlainText("Encrypted file and wordlist are required.")
             return
-        cmd = [sys.executable, script_path("dictionary_attack"), input_path, wordlist_path, '--algo', algo]
+        cmd_args = [input_path, wordlist_path, "--algo", algo]
         if iv:
-            cmd += ['--iv', iv]
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            cmd_args += ["--iv", iv]
+        proc = run_script("dictionary_attack", cmd_args)
         self.output.setPlainText(proc.stdout + proc.stderr)
 
     def brute_force_attack(self):
@@ -111,10 +106,10 @@ class KeyAnalysisPanel(QWidget):
         if not input_path or not keylen:
             self.output.setPlainText("Encrypted file and key length are required.")
             return
-        cmd = [sys.executable, script_path("brute_force_attack"), input_path, '--algo', algo, '--keylen', keylen, '--charset', charset]
+        cmd_args = [input_path, "--algo", algo, "--keylen", keylen, "--charset", charset]
         if iv:
-            cmd += ['--iv', iv]
+            cmd_args += ["--iv", iv]
         if max_attempts:
-            cmd += ['--max', max_attempts]
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            cmd_args += ["--max", max_attempts]
+        proc = run_script("brute_force_attack", cmd_args)
         self.output.setPlainText(proc.stdout + proc.stderr)

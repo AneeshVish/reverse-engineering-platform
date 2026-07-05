@@ -6,7 +6,7 @@ import os
 from PyQt6.QtCore import QObject, QUrl, pyqtSlot
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
-from src.utils.paths import project_root
+from src.utils.paths import asset_path
 
 try:
     from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -112,7 +112,7 @@ class CFGWebViewer(QWidget):
         self.view.page().setWebChannel(self.channel)
 
         self.view.page().loadFinished.connect(self._inject_graph)
-        html = os.path.join(project_root(), "assets", "web", "cfg_render.html")
+        html = asset_path("web", "cfg_render.html")
         self.view.load(QUrl.fromLocalFile(os.path.abspath(html)))
         layout.addWidget(self.view)
 

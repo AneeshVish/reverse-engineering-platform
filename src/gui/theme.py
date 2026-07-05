@@ -12,10 +12,9 @@ from dataclasses import dataclass
 
 from PyQt6.QtGui import QColor, QFontDatabase, QPalette
 
-ASSETS_FONTS = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "assets", "fonts",
-)
+from src.utils.paths import asset_path
+
+ASSETS_FONTS = asset_path("fonts")
 
 # Families we ship; resolve_fonts() confirms which actually loaded.
 _BUNDLED = {
