@@ -78,6 +78,9 @@ def probe_tree_sitter() -> bool:
 
 
 def probe_webengine() -> bool:
+    import os
+    if os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen":
+        return False
     try:
         import PyQt6.QtWebEngineWidgets  # noqa: F401
         return True

@@ -1,9 +1,12 @@
 """CFG 3D viewer bridge tests."""
 
 import json
+import os
+
+import pytest
 
 from src.core.program_model import ProgramModel
-from src.gui.cfg_web_viewer import GraphBridge
+from src.gui.cfg_web_viewer import GraphBridge, available
 
 
 def test_graph_bridge_includes_tooltip_fields():
@@ -20,3 +23,8 @@ def test_graph_bridge_includes_tooltip_fields():
     assert "disassembly" in attrs
     assert "instruction_count" in attrs
     assert "successors" in attrs
+
+
+def test_webengine_disabled_in_offscreen_ci(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    assert available() is False

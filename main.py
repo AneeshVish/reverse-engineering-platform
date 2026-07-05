@@ -30,8 +30,10 @@ def main():
     plugin_manager = PluginManager(settings.get_plugin_directory())
     plugin_manager.load_plugins()
     
-    # Create and start Qt application — WebEngine requires shared GL contexts.
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    # WebEngine requires shared GL contexts — skip in headless CI (offscreen).
+    import os
+    if os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen":
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication(sys.argv)
     app.setApplicationName("RevENG")
     app.setOrganizationName("RE-Team")

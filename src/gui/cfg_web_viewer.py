@@ -95,7 +95,12 @@ class CFGWebViewer(QWidget):
             from PyQt6.QtWidgets import QLabel
             layout.addWidget(QLabel("PyQt6-WebEngine not installed — pip install PyQt6-WebEngine"))
             return
-        self.view = QWebEngineView(self)
+        try:
+            self.view = QWebEngineView(self)
+        except Exception as exc:
+            from PyQt6.QtWidgets import QLabel
+            layout.addWidget(QLabel(f"WebEngine unavailable: {exc}"))
+            return
         settings = self.view.page().settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
@@ -124,4 +129,8 @@ class CFGWebViewer(QWidget):
 
 
 def available():
+    """True when WebEngine can be used interactively (not in CI offscreen mode)."""
+    import os
+    if os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen":
+        return False
     return WEBENGINE
