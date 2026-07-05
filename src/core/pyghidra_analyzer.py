@@ -4,6 +4,8 @@ import logging
 import os
 from typing import Optional
 
+from src.utils.paths import asset_path
+
 logger = logging.getLogger(__name__)
 
 TARGET_SYMBOLS = (
@@ -56,8 +58,7 @@ def _fallback_string_scan(bin_path: str) -> int:
 
 def render_frida_script(bin_path: str, module_name: str = "libflutter.so") -> str:
     """Fill boringssl_hook.js.template with discovered offset."""
-    from src.utils.paths import project_root
-    template_path = os.path.join(project_root(), "assets", "frida", "boringssl_hook.js.template")
+    template_path = asset_path("frida", "boringssl_hook.js.template")
     offset = auto_discover_boringssl_offset(bin_path)
     try:
         with open(template_path, encoding="utf-8") as f:

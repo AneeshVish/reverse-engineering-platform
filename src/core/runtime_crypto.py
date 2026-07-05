@@ -229,8 +229,8 @@ def load_unpin_scripts(session, assets_dir=None):
     """Load OkHttp/TrustKit/TrustManager unpin scripts from assets/frida/."""
     import os
     if assets_dir is None:
-        from src.utils.paths import project_root
-        assets_dir = os.path.join(project_root(), "assets", "frida")
+        from src.utils.paths import asset_path
+        assets_dir = asset_path("frida")
     names = ("okhttp_unpin.js", "trustkit_unpin.js", "trustmanager_override.js")
     loaded = []
     for name in names:

@@ -1,18 +1,19 @@
 
 import sys
 import os
-import os
 os.environ["PYTHONIOENCODING"] = "utf-8"
 import logging
 from pathlib import Path
 
-# Add the src directory to the path
-src_dir = Path(__file__).resolve().parent
-sys.path.append(str(src_dir))
+# Dev mode: add src to path. Frozen builds bundle everything via PyInstaller.
+if not getattr(sys, "frozen", False):
+    src_dir = Path(__file__).resolve().parent
+    sys.path.append(str(src_dir))
 
 from src.gui.main_window import MainWindow
 from src.utils.settings import Settings
 from src.utils.logger import setup_logger
+from src.utils.paths import _ensure_user_layout
 from src.plugins.plugin_manager import PluginManager
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
@@ -22,6 +23,9 @@ def main():
     setup_logger()
     logger = logging.getLogger(__name__)
     logger.info("Starting Reverse Engineering Platform")
+
+    if getattr(sys, "frozen", False):
+        _ensure_user_layout()
 
     # Load application settings
     settings = Settings()

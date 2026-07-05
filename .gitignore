@@ -1,5 +1,6 @@
 venv/
 .venv/
+.venv-build/
 env/
 .env
 *.pyc

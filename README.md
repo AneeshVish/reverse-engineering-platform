@@ -128,6 +128,56 @@ navigable map of what the software does; it does not magically reprint its sourc
 
 ---
 
+---
+
+## Download & run (no Python setup)
+
+You can use RevENG as a normal desktop app — no manual `pip install` needed.
+
+### Option A — Pre-built app (recommended for end users)
+
+Download the latest release for your platform from **GitHub Releases** (macOS `.zip`, Windows `.zip`, Linux `.tar.gz`). Unpack and launch:
+
+| Platform | After download |
+|---|---|
+| **macOS** | Open `RevENG.app` (right-click → Open the first time if Gatekeeper blocks it) |
+| **Windows** | Run `RevENG\RevENG.exe` |
+| **Linux** | Run `RevENG/RevENG` |
+
+Settings, projects, and plugins are stored in your user folder (`~/Library/Application Support/RevENG` on macOS).
+
+To **build the standalone app yourself** from source:
+
+```bash
+# macOS / Linux
+./scripts/build_release.sh
+
+# Windows
+scripts\build_release.bat
+```
+
+Maintainers can publish releases by pushing a version tag (`git tag v1.0.0 && git push origin v1.0.0`), which triggers the GitHub Actions release workflow.
+
+### Option B — One-command source install
+
+If you downloaded the source ZIP instead of a pre-built app:
+
+```bash
+# macOS / Linux
+./scripts/install.sh
+./RevENG
+
+# Windows
+scripts\install.bat
+RevENG.bat
+```
+
+This creates a local `.venv`, installs all core dependencies (including the 3D CFG WebEngine viewer), and adds a launcher script.
+
+**Note:** Heavy optional tools (Ghidra, Ollama, mitmproxy, Frida) are still installed separately — the app detects what's available and enables features accordingly.
+
+---
+
 ## Need Help?
 - Browse the source code—it's full of helpful comments.
 - Open an issue or pull request if you want to contribute or spot a bug!
