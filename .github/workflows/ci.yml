@@ -35,10 +35,10 @@ jobs:
         run: uv run reveng-codegen --verify-dirty --json
 
       - name: Ruff lint
-        run: uv run ruff check libs tools tests/engineering
+        run: uv run ruff check libs tools tests/engineering tests/packages packages/core-substrate packages/domain-producers
 
       - name: Ruff format check
-        run: uv run ruff format --check libs tools tests/engineering
+        run: uv run ruff format --check libs tools tests/engineering tests/packages packages/core-substrate packages/domain-producers
 
       - name: Pyright
         run: uv run pyright
@@ -48,6 +48,9 @@ jobs:
 
       - name: Engineering tests
         run: uv run pytest tests/engineering
+
+      - name: Package tests
+        run: uv run pytest tests/packages
 
       - name: Workspace build dry-run
         run: uv run reveng-workspace-build --dry-run --json

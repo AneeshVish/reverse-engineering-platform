@@ -1385,6 +1385,20 @@ requires-dist = [
 name = "reveng-core-substrate"
 version = "0.1.0"
 source = { editable = "packages/core-substrate" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-errors" },
+    { name = "reveng-logging" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
 
 [[package]]
 name = "reveng-deployment"
@@ -1432,6 +1446,22 @@ requires-dist = [
 name = "reveng-domain-producers"
 version = "0.1.0"
 source = { editable = "packages/domain-producers" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-errors" },
+    { name = "reveng-logging" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
 
 [[package]]
 name = "reveng-errors"

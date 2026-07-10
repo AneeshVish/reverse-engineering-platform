@@ -82,6 +82,11 @@ TOOL_ENTRYPOINTS = {
 FORBIDDEN_LIB_PREFIXES = ("reveng_api", "reveng_worker", "reveng_desktop")
 PACKAGE_IMPORT_PREFIX = "reveng_"
 
+# The core substrate is the shared foundation every implementation package builds
+# upon (Engineering Phase 003). It is the single universally-allowed cross-package
+# dependency; all other package-to-package edges remain forbidden by default.
+SUBSTRATE_PACKAGE = "reveng_core_substrate"
+
 
 @dataclass
 class RuleResult:
@@ -168,7 +173,19 @@ def _imported_modules(path: Path) -> list[str]:
 
 
 def check_dep_001(repo: Path) -> RuleResult:
-    """Enforce import boundaries for libs/packages/tools engineering code."""
+    """Enforce import boundaries for libs/packages/tools engineering code.
+
+    Layering policy:
+
+    * ``libs/*`` may import only other libs (never packages, apps, or tools).
+    * ``packages/*`` may import any lib, generated proto stubs, and
+      ``packages/core-substrate`` (the shared foundation). Any *other*
+      package-to-package edge is forbidden by default; a future Engineering
+      Phase may explicitly allowlist a specific edge.
+    * ``packages/core-substrate`` is special: it may import libs only and MUST
+      NOT import any sibling package.
+    * ``apps/*`` may import packages and libs; ``tools/*`` rules are unchanged.
+    """
     violations: list[str] = []
 
     package_dirs = {p.name: p for p in (repo / "packages").iterdir() if p.is_dir()} if (repo / "packages").is_dir() else {}
@@ -192,12 +209,13 @@ def check_dep_001(repo: Path) -> RuleResult:
                 }:
                     violations.append(f"{py.relative_to(repo)}: lib imports tool {mod}")
 
-    # packages must not import sibling packages or apps
+    # packages must not import sibling packages or apps, except the shared
+    # core-substrate foundation which every package may build upon.
     for name, pkg_dir in package_dirs.items():
         self_import = f"reveng_{name.replace('-', '_')}"
         for py in _iter_python_files(pkg_dir / "src"):
             for mod in _imported_modules(py):
-                if mod in package_imports and mod != self_import:
+                if mod in package_imports and mod != self_import and mod != SUBSTRATE_PACKAGE:
                     violations.append(f"{py.relative_to(repo)}: sibling package import {mod}")
                 if mod in {"reveng_api", "reveng_worker", "reveng_desktop"}:
                     violations.append(f"{py.relative_to(repo)}: package imports app {mod}")
