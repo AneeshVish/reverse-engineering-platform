@@ -1,0 +1,19 @@
+[project]
+name = "reveng-errors"
+version = "0.1.0"
+description = "Engineering error taxonomy and Result types"
+requires-python = ">=3.12"
+dependencies = [
+    "reveng-types",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[tool.uv.sources]
+reveng-types = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reveng_errors"]

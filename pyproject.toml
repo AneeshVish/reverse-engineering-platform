@@ -1,28 +1,149 @@
-[tool.black]
-line-length = 100
-target-version = ['py312']
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.git
-  | \.venv
-  | venv
-  | build
-  | dist
-)/
-'''
+[project]
+name = "reveng-workspace"
+version = "0.1.0"
+description = "RevENG monorepo engineering workspace"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "reveng-types",
+    "reveng-errors",
+    "reveng-logging",
+    "reveng-config",
+    "reveng-testing",
+    "reveng-codegen",
+    "reveng-bootstrap",
+    "reveng-validate",
+    "reveng-codegen-cli",
+    "reveng-workspace-build",
+    "reveng-release-cut",
+    "reveng-core-substrate",
+    "reveng-domain-producers",
+    "reveng-pass-engine",
+    "reveng-storage-evidence",
+    "reveng-reasoning",
+    "reveng-knowledge-graph",
+    "reveng-investigation",
+    "reveng-reporting",
+    "reveng-plugin-sdk",
+    "reveng-public-api",
+    "reveng-deployment",
+    "reveng-observability",
+    "reveng-security",
+    "reveng-platform-validation",
+    "reveng-api",
+    "reveng-desktop",
+    "reveng-worker",
+]
 
-[tool.isort]
-profile = "black"
-line_length = 100
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "pyright>=1.1",
+    "pre-commit>=3.7",
+]
+packaging = [
+    "pyinstaller>=6.0",
+]
+optional = []
+optional-linux = []
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.uv.workspace]
+members = [
+    "libs/reveng-codegen",
+    "libs/reveng-config",
+    "libs/reveng-errors",
+    "libs/reveng-logging",
+    "libs/reveng-testing",
+    "libs/reveng-types",
+    "tools/bootstrap",
+    "tools/codegen",
+    "tools/release_cut",
+    "tools/repo_validate",
+    "tools/workspace_build",
+    "packages/core-substrate",
+    "packages/deployment",
+    "packages/domain-producers",
+    "packages/investigation",
+    "packages/knowledge-graph",
+    "packages/observability",
+    "packages/pass-engine",
+    "packages/platform-validation",
+    "packages/plugin-sdk",
+    "packages/public-api",
+    "packages/reasoning",
+    "packages/reporting",
+    "packages/security",
+    "packages/storage-evidence",
+    "apps/reveng-api",
+    "apps/reveng-desktop",
+    "apps/reveng-worker",
+]
+
+[tool.uv.sources]
+reveng-types = { workspace = true }
+reveng-errors = { workspace = true }
+reveng-logging = { workspace = true }
+reveng-config = { workspace = true }
+reveng-testing = { workspace = true }
+reveng-codegen = { workspace = true }
+reveng-bootstrap = { workspace = true }
+reveng-validate = { workspace = true }
+reveng-codegen-cli = { workspace = true }
+reveng-workspace-build = { workspace = true }
+reveng-release-cut = { workspace = true }
+reveng-core-substrate = { workspace = true }
+reveng-domain-producers = { workspace = true }
+reveng-pass-engine = { workspace = true }
+reveng-storage-evidence = { workspace = true }
+reveng-reasoning = { workspace = true }
+reveng-knowledge-graph = { workspace = true }
+reveng-investigation = { workspace = true }
+reveng-reporting = { workspace = true }
+reveng-plugin-sdk = { workspace = true }
+reveng-public-api = { workspace = true }
+reveng-deployment = { workspace = true }
+reveng-observability = { workspace = true }
+reveng-security = { workspace = true }
+reveng-platform-validation = { workspace = true }
+reveng-api = { workspace = true }
+reveng-desktop = { workspace = true }
+reveng-worker = { workspace = true }
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
-extend-exclude = [".git", "__pycache__", "venv", ".venv", "build", "dist", "tools"]
+target-version = "py312"
+extend-exclude = [".git", "__pycache__", ".venv", "venv", "build", "dist", "src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"apps/**" = ["ALL"]
+"packages/**" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/engineering"]
 addopts = "-q"
 pythonpath = ["."]
 filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.pyright]
+include = ["libs", "tools", "tests/engineering"]
+exclude = [".venv", "src", "apps/reveng-desktop"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+reportMissingImports = true
+
+[tool.reveng]
+python_version = "3.12"
+transitional_desktop = true
+proto_dir = "proto"
+codegen_output_dir = "libs/reveng-codegen/src/reveng_codegen/generated"
