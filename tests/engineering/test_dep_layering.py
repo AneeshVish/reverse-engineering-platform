@@ -54,3 +54,26 @@ def test_package_may_not_import_app(tmp_path: Path) -> None:
     result = check_dep_001(tmp_path)
     assert not result.ok
     assert any("imports app reveng_desktop" in v for v in result.context["violations"])
+
+
+def test_allowlisted_edge_permits_specific_import(tmp_path: Path) -> None:
+    # Engineering Phase 005 allowlists pass-engine -> domain-producers.
+    _package(tmp_path, "core-substrate", "x = 1\n")
+    _package(tmp_path, "domain-producers", "y = 2\n")
+    _package(tmp_path, "pass-engine", "from reveng_domain_producers import Artifact\n")
+    result = check_dep_001(tmp_path)
+    assert result.ok, result.context
+
+
+def test_allowlist_is_edge_specific_not_global(tmp_path: Path) -> None:
+    # The allowlist opens exactly one edge; other imports by the same package,
+    # and the reverse edge, remain forbidden.
+    _package(tmp_path, "core-substrate", "x = 1\n")
+    _package(tmp_path, "domain-producers", "import reveng_pass_engine\n")  # reverse edge
+    _package(tmp_path, "pass-engine", "import reveng_reasoning\n")  # non-allowlisted
+    _package(tmp_path, "reasoning", "z = 3\n")
+    result = check_dep_001(tmp_path)
+    assert not result.ok
+    violations = result.context["violations"]
+    assert any("sibling package import reveng_reasoning" in v for v in violations)
+    assert any("sibling package import reveng_pass_engine" in v for v in violations)

@@ -1508,6 +1508,24 @@ source = { editable = "packages/observability" }
 name = "reveng-pass-engine"
 version = "0.1.0"
 source = { editable = "packages/pass-engine" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-domain-producers" },
+    { name = "reveng-errors" },
+    { name = "reveng-logging" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-domain-producers", editable = "packages/domain-producers" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
 
 [[package]]
 name = "reveng-platform-validation"

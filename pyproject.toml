@@ -143,6 +143,7 @@ include = [
     "tests/packages",
     "packages/core-substrate/src",
     "packages/domain-producers/src",
+    "packages/pass-engine/src",
 ]
 exclude = [".venv", "src", "apps/reveng-desktop"]
 pythonVersion = "3.12"

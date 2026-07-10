@@ -87,6 +87,16 @@ PACKAGE_IMPORT_PREFIX = "reveng_"
 # dependency; all other package-to-package edges remain forbidden by default.
 SUBSTRATE_PACKAGE = "reveng_core_substrate"
 
+# Explicitly allowlisted package-to-package edges beyond the universal substrate
+# dependency. Keyed by the importing package module; values are the package
+# modules it may import. Each edge is opened by a specific Engineering Phase and
+# must be justified there; the default remains deny.
+ALLOWED_PACKAGE_EDGES: dict[str, set[str]] = {
+    # Engineering Phase 005: the pass engine coordinates passes over normalized
+    # artifacts produced by the domain-producers package.
+    "reveng_pass_engine": {"reveng_domain_producers"},
+}
+
 
 @dataclass
 class RuleResult:
@@ -180,8 +190,9 @@ def check_dep_001(repo: Path) -> RuleResult:
     * ``libs/*`` may import only other libs (never packages, apps, or tools).
     * ``packages/*`` may import any lib, generated proto stubs, and
       ``packages/core-substrate`` (the shared foundation). Any *other*
-      package-to-package edge is forbidden by default; a future Engineering
-      Phase may explicitly allowlist a specific edge.
+      package-to-package edge is forbidden by default; a specific edge may be
+      opened by adding it to ``ALLOWED_PACKAGE_EDGES`` (importer -> imported),
+      which a future Engineering Phase does when a dependency is justified.
     * ``packages/core-substrate`` is special: it may import libs only and MUST
       NOT import any sibling package.
     * ``apps/*`` may import packages and libs; ``tools/*`` rules are unchanged.
@@ -210,12 +221,18 @@ def check_dep_001(repo: Path) -> RuleResult:
                     violations.append(f"{py.relative_to(repo)}: lib imports tool {mod}")
 
     # packages must not import sibling packages or apps, except the shared
-    # core-substrate foundation which every package may build upon.
+    # core-substrate foundation and any explicitly allowlisted edge.
     for name, pkg_dir in package_dirs.items():
         self_import = f"reveng_{name.replace('-', '_')}"
+        allowed_edges = ALLOWED_PACKAGE_EDGES.get(self_import, set())
         for py in _iter_python_files(pkg_dir / "src"):
             for mod in _imported_modules(py):
-                if mod in package_imports and mod != self_import and mod != SUBSTRATE_PACKAGE:
+                if (
+                    mod in package_imports
+                    and mod != self_import
+                    and mod != SUBSTRATE_PACKAGE
+                    and mod not in allowed_edges
+                ):
                     violations.append(f"{py.relative_to(repo)}: sibling package import {mod}")
                 if mod in {"reveng_api", "reveng_worker", "reveng_desktop"}:
                     violations.append(f"{py.relative_to(repo)}: package imports app {mod}")

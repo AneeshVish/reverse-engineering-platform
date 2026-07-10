@@ -35,10 +35,10 @@ jobs:
         run: uv run reveng-codegen --verify-dirty --json
 
       - name: Ruff lint
-        run: uv run ruff check libs tools tests/engineering tests/packages packages/core-substrate packages/domain-producers
+        run: uv run ruff check libs tools tests/engineering tests/packages packages/core-substrate packages/domain-producers packages/pass-engine
 
       - name: Ruff format check
-        run: uv run ruff format --check libs tools tests/engineering tests/packages packages/core-substrate packages/domain-producers
+        run: uv run ruff format --check libs tools tests/engineering tests/packages packages/core-substrate packages/domain-producers packages/pass-engine
 
       - name: Pyright
         run: uv run pyright
