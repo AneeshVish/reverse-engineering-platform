@@ -1,9 +1,23 @@
 [project]
 name = "reveng-desktop"
 version = "0.1.0"
-description = "RevENG reserved package — ownership only"
+description = "RevENG desktop application (transitional: product code still under repo src/)"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "PyQt6>=6.5.0",
+    "pyqtgraph>=0.13.0",
+    "capstone>=5.0.0",
+    "lief>=0.14.0",
+    "pefile>=2023.2.7",
+    "pycryptodome>=3.18.0",
+    "numpy>=1.24.0",
+    "networkx>=3.0",
+    "pandas>=1.5.0",
+    "matplotlib>=3.7.0",
+    "requests>=2.28.0",
+    "openai>=1.0.0",
+    "qtawesome>=1.2.0",
+]
 
 [build-system]
 requires = ["hatchling"]
