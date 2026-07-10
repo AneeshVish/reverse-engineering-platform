@@ -1,0 +1,21 @@
+[project]
+name = "reveng-config"
+version = "0.1.0"
+description = "Engineering configuration loading hierarchy"
+requires-python = ">=3.12"
+dependencies = [
+    "reveng-types",
+    "reveng-errors",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[tool.uv.sources]
+reveng-types = { workspace = true }
+reveng-errors = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reveng_config"]

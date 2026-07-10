@@ -3,6 +3,7 @@ venv/
 .venv-build/
 env/
 .env
+.reveng.local.toml
 *.pyc
 *.pyo
 *.log
@@ -11,6 +12,9 @@ env/
 *.egg-info/
 __pycache__/
 .cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .DS_Store
 *.bak
 *.swp
@@ -21,6 +25,8 @@ dist/
 build/
 .idea/
 .vscode/
+uv.lock.bak
+*.whl
 
 # Generated analysis artifacts
 encrypted_files_report.json

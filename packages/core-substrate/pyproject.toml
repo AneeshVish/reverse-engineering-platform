@@ -1,0 +1,24 @@
+[project]
+name = "reveng-core-substrate"
+version = "0.1.0"
+description = "RevENG core substrate — foundational runtime infrastructure (Impl Spec 001)"
+requires-python = ">=3.12"
+dependencies = [
+    "reveng-types",
+    "reveng-errors",
+    "reveng-logging",
+    "reveng-config",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+reveng-types = { workspace = true }
+reveng-errors = { workspace = true }
+reveng-logging = { workspace = true }
+reveng-config = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reveng_core_substrate"]
