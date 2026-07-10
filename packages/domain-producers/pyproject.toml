@@ -1,0 +1,26 @@
+[project]
+name = "reveng-domain-producers"
+version = "0.1.0"
+description = "RevENG domain producers — artifact ingestion and normalization (Impl Spec 002)"
+requires-python = ">=3.12"
+dependencies = [
+    "reveng-core-substrate",
+    "reveng-types",
+    "reveng-errors",
+    "reveng-logging",
+    "reveng-config",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+reveng-core-substrate = { workspace = true }
+reveng-types = { workspace = true }
+reveng-errors = { workspace = true }
+reveng-logging = { workspace = true }
+reveng-config = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reveng_domain_producers"]

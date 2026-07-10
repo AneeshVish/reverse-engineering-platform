@@ -1,0 +1,30 @@
+[project]
+name = "reveng-release-cut"
+version = "0.1.0"
+description = "Release tagging CLI"
+requires-python = ">=3.12"
+dependencies = [
+    "reveng-types",
+    "reveng-errors",
+    "reveng-logging",
+    "reveng-config",
+    "reveng-codegen",
+]
+
+[project.scripts]
+reveng-release-cut = "reveng_release_cut.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[tool.uv.sources]
+reveng-types = { workspace = true }
+reveng-errors = { workspace = true }
+reveng-logging = { workspace = true }
+reveng-config = { workspace = true }
+reveng-codegen = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reveng_release_cut"]

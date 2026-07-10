@@ -1,0 +1,23 @@
+[project]
+name = "reveng-codegen"
+version = "0.1.0"
+description = "Codegen path contracts and helpers"
+requires-python = ">=3.12"
+dependencies = [
+    "reveng-types",
+    "reveng-errors",
+    "reveng-logging",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[tool.uv.sources]
+reveng-types = { workspace = true }
+reveng-errors = { workspace = true }
+reveng-logging = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reveng_codegen"]
