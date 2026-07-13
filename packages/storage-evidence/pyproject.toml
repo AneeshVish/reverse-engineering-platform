@@ -1,13 +1,28 @@
 [project]
 name = "reveng-storage-evidence"
 version = "0.1.0"
-description = "RevENG reserved package — ownership only"
+description = "RevENG storage / evidence — canonical in-memory evidence store (Impl Spec 005)"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "reveng-core-substrate",
+    "reveng-intermediate-representation",
+    "reveng-types",
+    "reveng-errors",
+    "reveng-logging",
+    "reveng-config",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+reveng-core-substrate = { workspace = true }
+reveng-intermediate-representation = { workspace = true }
+reveng-types = { workspace = true }
+reveng-errors = { workspace = true }
+reveng-logging = { workspace = true }
+reveng-config = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/reveng_storage_evidence"]

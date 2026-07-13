@@ -1,13 +1,44 @@
 [project]
 name = "reveng-plugin-sdk"
 version = "0.1.0"
-description = "RevENG reserved package — ownership only"
+description = "RevENG plugin SDK — deterministic extension framework (Impl Spec 009)"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "reveng-core-substrate",
+    "reveng-domain-producers",
+    "reveng-pass-engine",
+    "reveng-intermediate-representation",
+    "reveng-storage-evidence",
+    "reveng-static-analysis",
+    "reveng-knowledge-graph",
+    "reveng-reasoning",
+    "reveng-investigation",
+    "reveng-reporting",
+    "reveng-types",
+    "reveng-errors",
+    "reveng-logging",
+    "reveng-config",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+reveng-core-substrate = { workspace = true }
+reveng-domain-producers = { workspace = true }
+reveng-pass-engine = { workspace = true }
+reveng-intermediate-representation = { workspace = true }
+reveng-storage-evidence = { workspace = true }
+reveng-static-analysis = { workspace = true }
+reveng-knowledge-graph = { workspace = true }
+reveng-reasoning = { workspace = true }
+reveng-investigation = { workspace = true }
+reveng-reporting = { workspace = true }
+reveng-types = { workspace = true }
+reveng-errors = { workspace = true }
+reveng-logging = { workspace = true }
+reveng-config = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/reveng_plugin_sdk"]

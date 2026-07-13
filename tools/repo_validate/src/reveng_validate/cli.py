@@ -95,6 +95,59 @@ ALLOWED_PACKAGE_EDGES: dict[str, set[str]] = {
     # Engineering Phase 005: the pass engine coordinates passes over normalized
     # artifacts produced by the domain-producers package.
     "reveng_pass_engine": {"reveng_domain_producers"},
+    # Engineering Phase 007: the evidence store references canonical IR entities
+    # by identifier.
+    "reveng_storage_evidence": {"reveng_intermediate_representation"},
+    # Engineering Phase 008: static analysis consumes artifacts, runs deterministic
+    # passes, produces canonical IR, and emits evidence.
+    "reveng_static_analysis": {
+        "reveng_domain_producers",
+        "reveng_pass_engine",
+        "reveng_intermediate_representation",
+        "reveng_storage_evidence",
+    },
+    # Engineering Phase 009: the knowledge graph consumes canonical IR and
+    # evidence to build a deterministic, immutable semantic graph.
+    "reveng_knowledge_graph": {
+        "reveng_intermediate_representation",
+        "reveng_storage_evidence",
+    },
+    # Engineering Phase 010: the reasoning engine derives deterministic, explainable
+    # inferences from the knowledge graph and the evidence store.
+    "reveng_reasoning": {
+        "reveng_knowledge_graph",
+        "reveng_storage_evidence",
+    },
+    # Engineering Phase 011: the investigation engine groups inferences, graph, and
+    # evidence into deterministic, immutable investigation cases.
+    "reveng_investigation": {
+        "reveng_reasoning",
+        "reveng_knowledge_graph",
+        "reveng_storage_evidence",
+    },
+    # Engineering Phase 012: reporting transforms investigation cases (and their
+    # referenced findings/inferences/evidence/graph) into deterministic reports.
+    "reveng_reporting": {
+        "reveng_investigation",
+        "reveng_reasoning",
+        "reveng_knowledge_graph",
+        "reveng_storage_evidence",
+    },
+    # Engineering Phase 013: the plugin SDK is intentionally the only package
+    # permitted to integrate with every backend subsystem, exposing extension
+    # points without bypassing the platform managers.
+    "reveng_plugin_sdk": {
+        "reveng_core_substrate",
+        "reveng_domain_producers",
+        "reveng_pass_engine",
+        "reveng_intermediate_representation",
+        "reveng_storage_evidence",
+        "reveng_static_analysis",
+        "reveng_knowledge_graph",
+        "reveng_reasoning",
+        "reveng_investigation",
+        "reveng_reporting",
+    },
 }
 
 

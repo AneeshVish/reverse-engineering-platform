@@ -22,6 +22,7 @@ members = [
     "reveng-desktop",
     "reveng-domain-producers",
     "reveng-errors",
+    "reveng-intermediate-representation",
     "reveng-investigation",
     "reveng-knowledge-graph",
     "reveng-logging",
@@ -34,6 +35,7 @@ members = [
     "reveng-release-cut",
     "reveng-reporting",
     "reveng-security",
+    "reveng-static-analysis",
     "reveng-storage-evidence",
     "reveng-testing",
     "reveng-types",
@@ -1475,14 +1477,77 @@ dependencies = [
 requires-dist = [{ name = "reveng-types", editable = "libs/reveng-types" }]
 
 [[package]]
+name = "reveng-intermediate-representation"
+version = "0.1.0"
+source = { editable = "packages/intermediate-representation" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-errors" },
+    { name = "reveng-logging" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
+
+[[package]]
 name = "reveng-investigation"
 version = "0.1.0"
 source = { editable = "packages/investigation" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-errors" },
+    { name = "reveng-knowledge-graph" },
+    { name = "reveng-logging" },
+    { name = "reveng-reasoning" },
+    { name = "reveng-storage-evidence" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-knowledge-graph", editable = "packages/knowledge-graph" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-reasoning", editable = "packages/reasoning" },
+    { name = "reveng-storage-evidence", editable = "packages/storage-evidence" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
 
 [[package]]
 name = "reveng-knowledge-graph"
 version = "0.1.0"
 source = { editable = "packages/knowledge-graph" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-errors" },
+    { name = "reveng-intermediate-representation" },
+    { name = "reveng-logging" },
+    { name = "reveng-storage-evidence" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-intermediate-representation", editable = "packages/intermediate-representation" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-storage-evidence", editable = "packages/storage-evidence" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
 
 [[package]]
 name = "reveng-logging"
@@ -1536,6 +1601,40 @@ source = { editable = "packages/platform-validation" }
 name = "reveng-plugin-sdk"
 version = "0.1.0"
 source = { editable = "packages/plugin-sdk" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-domain-producers" },
+    { name = "reveng-errors" },
+    { name = "reveng-intermediate-representation" },
+    { name = "reveng-investigation" },
+    { name = "reveng-knowledge-graph" },
+    { name = "reveng-logging" },
+    { name = "reveng-pass-engine" },
+    { name = "reveng-reasoning" },
+    { name = "reveng-reporting" },
+    { name = "reveng-static-analysis" },
+    { name = "reveng-storage-evidence" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-domain-producers", editable = "packages/domain-producers" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-intermediate-representation", editable = "packages/intermediate-representation" },
+    { name = "reveng-investigation", editable = "packages/investigation" },
+    { name = "reveng-knowledge-graph", editable = "packages/knowledge-graph" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-pass-engine", editable = "packages/pass-engine" },
+    { name = "reveng-reasoning", editable = "packages/reasoning" },
+    { name = "reveng-reporting", editable = "packages/reporting" },
+    { name = "reveng-static-analysis", editable = "packages/static-analysis" },
+    { name = "reveng-storage-evidence", editable = "packages/storage-evidence" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
 
 [[package]]
 name = "reveng-public-api"
@@ -1546,6 +1645,26 @@ source = { editable = "packages/public-api" }
 name = "reveng-reasoning"
 version = "0.1.0"
 source = { editable = "packages/reasoning" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-errors" },
+    { name = "reveng-knowledge-graph" },
+    { name = "reveng-logging" },
+    { name = "reveng-storage-evidence" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-knowledge-graph", editable = "packages/knowledge-graph" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-storage-evidence", editable = "packages/storage-evidence" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
 
 [[package]]
 name = "reveng-release-cut"
@@ -1572,6 +1691,30 @@ requires-dist = [
 name = "reveng-reporting"
 version = "0.1.0"
 source = { editable = "packages/reporting" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-errors" },
+    { name = "reveng-investigation" },
+    { name = "reveng-knowledge-graph" },
+    { name = "reveng-logging" },
+    { name = "reveng-reasoning" },
+    { name = "reveng-storage-evidence" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-investigation", editable = "packages/investigation" },
+    { name = "reveng-knowledge-graph", editable = "packages/knowledge-graph" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-reasoning", editable = "packages/reasoning" },
+    { name = "reveng-storage-evidence", editable = "packages/storage-evidence" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
 
 [[package]]
 name = "reveng-security"
@@ -1579,9 +1722,56 @@ version = "0.1.0"
 source = { editable = "packages/security" }
 
 [[package]]
+name = "reveng-static-analysis"
+version = "0.1.0"
+source = { editable = "packages/static-analysis" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-domain-producers" },
+    { name = "reveng-errors" },
+    { name = "reveng-intermediate-representation" },
+    { name = "reveng-logging" },
+    { name = "reveng-pass-engine" },
+    { name = "reveng-storage-evidence" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-domain-producers", editable = "packages/domain-producers" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-intermediate-representation", editable = "packages/intermediate-representation" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-pass-engine", editable = "packages/pass-engine" },
+    { name = "reveng-storage-evidence", editable = "packages/storage-evidence" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
+
+[[package]]
 name = "reveng-storage-evidence"
 version = "0.1.0"
 source = { editable = "packages/storage-evidence" }
+dependencies = [
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-errors" },
+    { name = "reveng-intermediate-representation" },
+    { name = "reveng-logging" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-intermediate-representation", editable = "packages/intermediate-representation" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
 
 [[package]]
 name = "reveng-testing"
@@ -1644,6 +1834,7 @@ dependencies = [
     { name = "reveng-desktop" },
     { name = "reveng-domain-producers" },
     { name = "reveng-errors" },
+    { name = "reveng-intermediate-representation" },
     { name = "reveng-investigation" },
     { name = "reveng-knowledge-graph" },
     { name = "reveng-logging" },
@@ -1656,6 +1847,7 @@ dependencies = [
     { name = "reveng-release-cut" },
     { name = "reveng-reporting" },
     { name = "reveng-security" },
+    { name = "reveng-static-analysis" },
     { name = "reveng-storage-evidence" },
     { name = "reveng-testing" },
     { name = "reveng-types" },
@@ -1687,6 +1879,7 @@ requires-dist = [
     { name = "reveng-desktop", editable = "apps/reveng-desktop" },
     { name = "reveng-domain-producers", editable = "packages/domain-producers" },
     { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-intermediate-representation", editable = "packages/intermediate-representation" },
     { name = "reveng-investigation", editable = "packages/investigation" },
     { name = "reveng-knowledge-graph", editable = "packages/knowledge-graph" },
     { name = "reveng-logging", editable = "libs/reveng-logging" },
@@ -1699,6 +1892,7 @@ requires-dist = [
     { name = "reveng-release-cut", editable = "tools/release_cut" },
     { name = "reveng-reporting", editable = "packages/reporting" },
     { name = "reveng-security", editable = "packages/security" },
+    { name = "reveng-static-analysis", editable = "packages/static-analysis" },
     { name = "reveng-storage-evidence", editable = "packages/storage-evidence" },
     { name = "reveng-testing", editable = "libs/reveng-testing" },
     { name = "reveng-types", editable = "libs/reveng-types" },

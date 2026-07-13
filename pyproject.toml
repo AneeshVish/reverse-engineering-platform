@@ -19,7 +19,9 @@ dependencies = [
     "reveng-core-substrate",
     "reveng-domain-producers",
     "reveng-pass-engine",
+    "reveng-intermediate-representation",
     "reveng-storage-evidence",
+    "reveng-static-analysis",
     "reveng-reasoning",
     "reveng-knowledge-graph",
     "reveng-investigation",
@@ -67,6 +69,8 @@ members = [
     "packages/core-substrate",
     "packages/deployment",
     "packages/domain-producers",
+    "packages/intermediate-representation",
+    "packages/static-analysis",
     "packages/investigation",
     "packages/knowledge-graph",
     "packages/observability",
@@ -98,7 +102,9 @@ reveng-release-cut = { workspace = true }
 reveng-core-substrate = { workspace = true }
 reveng-domain-producers = { workspace = true }
 reveng-pass-engine = { workspace = true }
+reveng-intermediate-representation = { workspace = true }
 reveng-storage-evidence = { workspace = true }
+reveng-static-analysis = { workspace = true }
 reveng-reasoning = { workspace = true }
 reveng-knowledge-graph = { workspace = true }
 reveng-investigation = { workspace = true }
@@ -144,6 +150,14 @@ include = [
     "packages/core-substrate/src",
     "packages/domain-producers/src",
     "packages/pass-engine/src",
+    "packages/intermediate-representation/src",
+    "packages/storage-evidence/src",
+    "packages/static-analysis/src",
+    "packages/knowledge-graph/src",
+    "packages/reasoning/src",
+    "packages/investigation/src",
+    "packages/reporting/src",
+    "packages/plugin-sdk/src",
 ]
 exclude = [".venv", "src", "apps/reveng-desktop"]
 pythonVersion = "3.12"
