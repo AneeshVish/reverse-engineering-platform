@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem, QStatusBar, QFileDialog, QPushButton,
     QProgressBar, QLabel, QComboBox, QCheckBox, QLineEdit, QInputDialog,
     QApplication, QDockWidget, QToolBar, QToolButton, QFrame, QSizePolicy,
+    QStackedWidget, QMenu, QListWidget, QListWidgetItem,
 ) # All widgets imported at top
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
@@ -14,12 +15,18 @@ from src.gui import theme as theme_mod
 from src.gui.icons import icon as qicon
 from src.gui.insights_panel import InsightsPanel
 from src.gui.command_palette import CommandPalette
+# Phase 016 -- Pipeline Workspace / desktop-SDK integration (additive only;
+# every import below is optional at runtime -- see _try_import_pipeline_deps).
+from src.gui.ui_states import PipelineState
+from src.gui.references_panel import ReferencesPanel
+from src.core.annotation_store import AnnotationStore, compute_artifact_id
 import logging
 import time
 import hashlib
 import os
 import sys
 import subprocess
+from pathlib import Path
 
 # Thresholds above which decompiled output is written to a file instead of
 # being rendered inline in a QTextEdit (which becomes unresponsive on huge text).
@@ -753,7 +760,47 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'file_label'):
             self.file_label.setText(file_path)
         self.log_view.append(f"[INFO] Opened file: {file_path}")
+
+        # Phase 016: content-derived artifact id (renames survive re-opening
+        # the same binary, 10.8) + Recent Projects tracking (10.10), both
+        # best-effort -- never block the legacy Open File flow.
+        try:
+            with open(file_path, "rb") as fh:
+                self.current_artifact_id = compute_artifact_id(fh.read())
+        except Exception:
+            self.current_artifact_id = None
+        if self.desktop_manager is not None:
+            try:
+                self.desktop_manager.open_project(Path(file_path))
+            except Exception as e:
+                self.log_view.append(f"[WARN] Project Explorer: {e}")
+            self._refresh_recent_ui()
+
         self.start_binary_analysis(file_path)
+
+    def _recent_project_paths(self):
+        if self.desktop_manager is None:
+            return []
+        try:
+            return list(self.desktop_manager.workspace.recent_files)
+        except Exception:
+            return []
+
+    def _open_recent(self, path):
+        self.open_path(path)
+
+    def _refresh_recent_ui(self):
+        """Best-effort refresh of every widget that shows recent projects."""
+        recent_list = getattr(self, "explorer_recent_list", None)
+        if recent_list is not None:
+            recent_list.clear()
+            for path in self._recent_project_paths()[:10]:
+                recent_list.addItem(str(path))
+        if self.project_explorer is not None:
+            try:
+                self.project_explorer.refresh()
+            except Exception:
+                pass
 
     def _scan_bundle(self, path):
         """Run whole-application analysis in the Full Software tab."""
@@ -773,7 +820,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def __init__(self, settings, plugin_manager):
+    def __init__(self, settings, plugin_manager, desktop_manager=None):
         super().__init__()
         self.settings = settings
         self.plugin_manager = plugin_manager
@@ -784,11 +831,24 @@ class MainWindow(QMainWindow):
         self.ai_decompiler = AIDecompiler()
         self.decompiler_manager = DecompilerManager()
         self.decompiler_manager.register_engine(
-            DecompilerEngine.LLM4DECOMPILE, 
+            DecompilerEngine.LLM4DECOMPILE,
             self.ai_decompiler
         )
         self.threat_intel = ThreatIntelligence()
         self.ioc_extractor = IOCExtractor()
+
+        # Phase 016 -- Pipeline Workspace / desktop-SDK integration. Fully
+        # optional: legacy functionality never depends on any of this being
+        # present or reachable (10.12). `desktop_manager` is a
+        # `reveng_desktop_sdk.DesktopManager`, constructed once in main.py.
+        self.desktop_manager = desktop_manager
+        self.annotation_store = AnnotationStore()
+        self.current_artifact_id = None
+        self.backend_controller = None
+        self.pipeline_workspace = None
+        self.project_explorer = None
+        self.center_stack = None
+
         self._welcome_screen_shown = False
         self._main_ui_initialized = False
         self.show_welcome_screen()
@@ -837,6 +897,18 @@ class MainWindow(QMainWindow):
         btn_security.setIcon(qicon("fa5s.shield-alt"))
         cl.addWidget(btn_cracking)
         cl.addWidget(btn_security)
+
+        # Recent Projects (Phase 016, 10.10) -- conditional, additive; hidden
+        # entirely when there's nothing to show, so first-run is unchanged.
+        recent_paths = self._recent_project_paths()
+        if recent_paths:
+            cl.addSpacing(10)
+            cl.addWidget(QLabel("Recent Projects", objectName="Dim"))
+            for path in recent_paths[:5]:
+                btn = QPushButton(f"  {path}")
+                btn.setIcon(qicon("fa5s.history"))
+                btn.clicked.connect(lambda _checked=False, p=path: self._open_recent(p))
+                cl.addWidget(btn)
 
         row.addWidget(card)
         row.addStretch()
@@ -945,9 +1017,16 @@ class MainWindow(QMainWindow):
         # Log view first — panels reference self.log_view if they fail to load.
         self._build_log_view()
 
-        # Center: the analysis tab area.
+        # Center: the analysis tab area, wrapped in a QStackedWidget so the
+        # Pipeline Workspace (Phase 016) can be swapped in without altering
+        # anything about the legacy tabs (10.1's navigation-ownership rule:
+        # the activity rail owns *workspace* selection between the two
+        # pages; the widgets within each page own navigation within it).
         center = self.create_center_panel()
-        self.setCentralWidget(center)
+        self._legacy_workspace_page = center  # the actual QStackedWidget page (analysis_tabs is nested inside it, not a direct page itself)
+        self.center_stack = QStackedWidget()
+        self.center_stack.addWidget(center)  # index 0: legacy tabs, unchanged
+        self.setCentralWidget(self.center_stack)
 
         # Docks: Explorer (left), Insights (right), Log (bottom). Keep widths a
         # modest fraction of the window so content never gets pushed off-screen.
@@ -957,6 +1036,11 @@ class MainWindow(QMainWindow):
             "Insights", self.create_right_panel(), Qt.DockWidgetArea.RightDockWidgetArea)
         self.log_dock = self._add_dock(
             "Log", self._log_dock_widget, Qt.DockWidgetArea.BottomDockWidgetArea)
+
+        # Project Explorer (10.10) -- a new dock, tabbed with Explorer by
+        # default so it doesn't consume extra screen space initially.
+        self._init_project_explorer_dock()
+
         win_w = max(self.width(), 1000)
         side = max(240, min(300, int(win_w * 0.21)))
         self.resizeDocks([self.explorer_dock, self.insights_dock], [side, side],
@@ -969,10 +1053,18 @@ class MainWindow(QMainWindow):
         self._build_main_toolbar()
         self._install_command_palette()
 
+        # Phase 016 backend integration -- fully optional; legacy launch
+        # never depends on this succeeding (10.12).
+        self._init_pipeline_workspace()
+        self._restore_session_state()
+
     # ---- layout helpers -----------------------------------------------------
 
     def _add_dock(self, title, widget, area):
         dock = QDockWidget(title, self)
+        # Required for QMainWindow.saveState()/restoreState() (Phase 016,
+        # 10.14 session restore) to actually persist this dock's layout.
+        dock.setObjectName(f"Dock_{title.replace(' ', '_')}")
         dock.setWidget(widget)
         dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable
@@ -1022,6 +1114,17 @@ class MainWindow(QMainWindow):
         rail_action("fa5s.key", "Key Analysis", lambda: self._select_tab("Key Analysis"))
         rail_action("fa5s.network-wired", "Network Capture", lambda: self._select_tab("Network Capture"))
         rail_action("fa5s.box-open", "Whole-app (Full Software)", lambda: self._select_tab("Full Software"))
+
+        # Pipeline Workspace group (Phase 016, 10.1): a separate, permanent
+        # shell -- the rail owns *which workspace* is active (this group vs.
+        # the legacy tabs above); the container itself owns navigation
+        # within the workspace once selected. Phase 017 only adds icons
+        # here; nothing about this group restructures (10.17).
+        rail.addSeparator()
+        rail_action("fa5s.stream", "Pipeline Home", lambda: self._show_pipeline_destination("home"))
+        rail_action("fa5s.file-alt", "Report", lambda: self._show_pipeline_destination("report"))
+        rail_action("fa5s.puzzle-piece", "Extensions", lambda: self._show_pipeline_destination("extensions"))
+
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         rail.addWidget(spacer)
@@ -1067,6 +1170,7 @@ class MainWindow(QMainWindow):
         sc_mac.activated.connect(self.open_command_palette)
 
     def _select_tab(self, name):
+        self._show_legacy_workspace()
         tabs = getattr(self, "analysis_tabs", None)
         if tabs is None:
             return
@@ -1074,6 +1178,97 @@ class MainWindow(QMainWindow):
             if tabs.tabText(i) == name:
                 tabs.setCurrentIndex(i)
                 return
+
+    def _show_legacy_workspace(self):
+        """Switch the center stack back to the legacy 19-tab area (Phase 016,
+        10.1) -- called whenever code jumps to a legacy tab so that jump
+        works correctly even if the Pipeline Workspace is currently shown."""
+
+        page = getattr(self, "_legacy_workspace_page", None)
+        if self.center_stack is not None and page is not None:
+            self.center_stack.setCurrentWidget(page)
+
+    def _show_pipeline_destination(self, name):
+        """Switch the center stack to the Pipeline Workspace and navigate to
+        one of its destinations (10.1's navigation-ownership rule)."""
+
+        if self.pipeline_workspace is None or self.center_stack is None:
+            if hasattr(self, "log_view"):
+                self.log_view.append("[INFO] Pipeline Workspace is not available.")
+            return
+        self.center_stack.setCurrentWidget(self.pipeline_workspace)
+        self.pipeline_workspace.select_destination(name)
+
+    def _generate_report_from_menu(self):
+        self._show_pipeline_destination("report")
+        if self.pipeline_workspace is not None:
+            self.pipeline_workspace._on_generate_requested()
+
+    def _populate_open_recent_menu(self):
+        menu = getattr(self, "_open_recent_menu", None)
+        if menu is None:
+            return
+        menu.clear()
+        paths = self._recent_project_paths()
+        if not paths:
+            action = menu.addAction("(no recent projects)")
+            action.setEnabled(False)
+            return
+        for path in paths[:10]:
+            menu.addAction(str(path)).triggered.connect(
+                lambda _checked=False, p=str(path): self._open_recent(p))
+
+    def _init_project_explorer_dock(self):
+        if self.desktop_manager is None:
+            return
+        try:
+            from src.gui.project_explorer import ProjectExplorer
+            self.project_explorer = ProjectExplorer(self.desktop_manager)
+            self.project_explorer.project_open_requested.connect(self.open_path)
+            self.project_explorer_dock = self._add_dock(
+                "Project Explorer", self.project_explorer, Qt.DockWidgetArea.LeftDockWidgetArea)
+            self.tabifyDockWidget(self.explorer_dock, self.project_explorer_dock)
+        except Exception as e:
+            if hasattr(self, "log_view"):
+                self.log_view.append(f"[WARN] Project Explorer unavailable: {e}")
+
+    def _init_pipeline_workspace(self):
+        """Build the Pipeline Workspace (10.1) if a DesktopManager was
+        supplied. Best-effort -- legacy launch never depends on this."""
+
+        if self.desktop_manager is None or self.center_stack is None:
+            return
+        try:
+            from src.gui.backend_service_controller import BackendServiceController
+            from src.gui.pipeline_workspace import PipelineWorkspace
+
+            self.backend_controller = BackendServiceController(self.desktop_manager, parent=self)
+            self.pipeline_workspace = PipelineWorkspace(
+                self.backend_controller, self._current_binary_for_pipeline, parent=self)
+            self.center_stack.addWidget(self.pipeline_workspace)
+            self._last_known_extensions = []
+            self.backend_controller.plugins_ready.connect(self._on_extensions_ready)
+            self.backend_controller.initialize()
+        except Exception as e:
+            if hasattr(self, "log_view"):
+                self.log_view.append(f"[WARN] Pipeline Workspace unavailable: {e}")
+            self.backend_controller = None
+            self.pipeline_workspace = None
+
+    def _on_extensions_ready(self, plugins):
+        self._last_known_extensions = list(plugins)
+
+    def _current_binary_for_pipeline(self):
+        """(content_bytes, source_ref) for the loaded binary, or None."""
+
+        if not self.current_file_path or not os.path.isfile(self.current_file_path):
+            return None
+        try:
+            with open(self.current_file_path, "rb") as fh:
+                content = fh.read()
+        except Exception:
+            return None
+        return (content, os.path.basename(self.current_file_path))
 
     def _select_right(self, name):
         tabs = getattr(self, "right_tabs", None)
@@ -1147,7 +1342,68 @@ class MainWindow(QMainWindow):
                 ncp.stop_capture()
             except Exception:
                 pass
+
+        # Phase 016, 10.14: save session-restore state; shut down the
+        # backend service (subprocess, if self-managed) cleanly.
+        self._save_session_state()
+        if self.backend_controller is not None:
+            try:
+                self.backend_controller.shutdown()
+            except Exception:
+                pass
+
         super().closeEvent(event)
+
+    def _save_session_state(self):
+        """Session restore scope (10.14): geometry, dock layout, selected
+        legacy tab, selected Pipeline destination. Explicitly NOT saved:
+        running workers, backend jobs, live capture, runtime instrumentation,
+        log contents -- none of that is touched here."""
+
+        try:
+            session = {
+                "geometry": bytes(self.saveGeometry()).hex(),
+                "window_state": bytes(self.saveState()).hex(),
+            }
+            tabs = getattr(self, "analysis_tabs", None)
+            if tabs is not None and tabs.currentIndex() >= 0:
+                session["selected_tab"] = tabs.tabText(tabs.currentIndex())
+            if self.pipeline_workspace is not None:
+                session["pipeline_destination"] = self.pipeline_workspace.current_destination()
+            self.settings.update("session", session)
+            self.settings.save()
+        except Exception as e:
+            logger.warning("Failed to save session state: %s", e)
+
+    def _restore_session_state(self):
+        """The other half of 10.14 -- called once the workbench exists."""
+
+        session = self.settings.get("session") or {}
+        try:
+            geometry_hex = session.get("geometry")
+            if geometry_hex:
+                from PyQt6.QtCore import QByteArray
+                self.restoreGeometry(QByteArray.fromHex(geometry_hex.encode()))
+            state_hex = session.get("window_state")
+            if state_hex:
+                from PyQt6.QtCore import QByteArray
+                self.restoreState(QByteArray.fromHex(state_hex.encode()))
+        except Exception as e:
+            logger.warning("Failed to restore window geometry/state: %s", e)
+
+        selected_tab = session.get("selected_tab")
+        if selected_tab:
+            self._select_tab(selected_tab)
+
+        pipeline_destination = session.get("pipeline_destination")
+        if pipeline_destination and pipeline_destination != "home" and self.pipeline_workspace is not None:
+            # Restore the destination without stealing focus from the
+            # legacy tabs at startup -- only pre-selects it within the
+            # (still-hidden) Pipeline Workspace container.
+            try:
+                self.pipeline_workspace.select_destination(pipeline_destination)
+            except Exception:
+                pass
 
     @staticmethod
     def _fmt_size(n):
@@ -1465,9 +1721,54 @@ class MainWindow(QMainWindow):
         ]
         for tname in theme_mod.THEMES:
             actions.append((f"Theme: {tname}", lambda n=tname: (self.theme_combo.setCurrentText(n))))
-        palette = CommandPalette(actions, self)
+        if self.desktop_manager is not None:
+            actions.append(("Show: Pipeline Home", lambda: self._show_pipeline_destination("home")))
+            actions.append(("Show: Report", lambda: self._show_pipeline_destination("report")))
+            actions.append(("Show: Extensions", lambda: self._show_pipeline_destination("extensions")))
+            actions.append(("Generate Report", self._generate_report_from_menu))
+
+        palette = CommandPalette(self._build_search_registry(actions), self)
         palette.move(self.geometry().center().x() - 260, self.geometry().top() + 120)
         palette.exec()
+
+    def _build_search_registry(self, command_actions):
+        """Provider-based search (Phase 016, 10.7): CommandProvider always;
+        Function/Report/Extension providers only once their data source
+        exists. Built fresh per invocation -- cheap, and always current."""
+
+        from src.gui.search_providers import (
+            CommandProvider, FunctionProvider, ReportProvider,
+            ExtensionProvider, SearchProviderRegistry,
+        )
+
+        registry = SearchProviderRegistry()
+        registry.register(CommandProvider(command_actions))
+
+        def get_functions():
+            tree = getattr(self, "functions_tree", None)
+            if tree is None:
+                return []
+            out = []
+            for i in range(tree.topLevelItemCount()):
+                item = tree.topLevelItem(i)
+                addr = item.data(0, Qt.ItemDataRole.UserRole)
+                if addr is not None:
+                    out.append((item.text(0), addr))
+            return out
+
+        registry.register(FunctionProvider(get_functions, self.navigate_to_address))
+
+        if self.backend_controller is not None:
+            registry.register(ReportProvider(
+                lambda: self.backend_controller.latest_report,
+                lambda: self._show_pipeline_destination("report"),
+            ))
+            registry.register(ExtensionProvider(
+                lambda: getattr(self, "_last_known_extensions", []),
+                lambda: self._show_pipeline_destination("extensions"),
+            ))
+
+        return registry
 
     def download_log_file(self):
         """Download the contents of the log view to a file chosen by the user."""
@@ -1538,6 +1839,11 @@ class MainWindow(QMainWindow):
         self.download_disassembly_btn.setIcon(qicon("fa5s.download"))
         self.download_disassembly_btn.clicked.connect(self.download_disassembly)
         disassembly_layout.addWidget(self.download_disassembly_btn)
+        # References & Relationships (Phase 016, 10.9) -- collapsible, off by
+        # default, so the existing Disassembly layout is undisturbed.
+        self.references_panel = ReferencesPanel()
+        self.references_panel.navigate_requested.connect(self.navigate_to_address)
+        disassembly_layout.addWidget(self.references_panel)
         add_tab(self._disassembly_tab, "Disassembly", "fa5s.microchip")
 
         self.endpoint_detection_view = QTextEdit()
@@ -1804,6 +2110,18 @@ class MainWindow(QMainWindow):
         self.file_label.setWordWrap(True)
         layout.addWidget(self.file_label)
 
+        # Recent (Phase 016, 10.10) -- a lighter-weight quick-reopen list,
+        # backed by the same Desktop-SDK Workspace as the fuller Project
+        # Explorer dock. Empty/hidden until a desktop_manager is present.
+        self.explorer_recent_list = QListWidget()
+        self.explorer_recent_list.setMaximumHeight(80)
+        self.explorer_recent_list.itemDoubleClicked.connect(
+            lambda item: self._open_recent(item.text()))
+        self.explorer_recent_list.setVisible(self.desktop_manager is not None)
+        if self.desktop_manager is not None:
+            layout.addWidget(QLabel("RECENT", objectName="Dim"))
+            layout.addWidget(self.explorer_recent_list)
+
         # Analysis options.
         self.ai_decompile_cb = QCheckBox("AI decompilation")
         self.ai_decompile_cb.setChecked(True)
@@ -1826,6 +2144,9 @@ class MainWindow(QMainWindow):
         self.functions_tree = QTreeWidget()
         self.functions_tree.setHeaderLabels(["Function", "Address"])
         self.functions_tree.itemDoubleClicked.connect(self.on_function_selected)
+        # Rename (Phase 016, 10.8) -- the app's first-ever context menu.
+        self.functions_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.functions_tree.customContextMenuRequested.connect(self._show_function_context_menu)
         layout.addWidget(self.functions_tree)
 
         self.progress_bar = QProgressBar()
@@ -1833,14 +2154,53 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.progress_bar)
         return left_widget
 
+    def _resolve_function_name(self, address, original_name):
+        """Rename-resolved display name (Phase 016, 10.8 shared-overlay rule)."""
+
+        if self.current_artifact_id is None:
+            return original_name
+        try:
+            return self.annotation_store.resolve_name(
+                self.current_artifact_id, address, original_name)
+        except Exception:
+            return original_name
+
+    def _show_function_context_menu(self, pos):
+        item = self.functions_tree.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        rename_action = menu.addAction("Rename…")
+        chosen = menu.exec(self.functions_tree.viewport().mapToGlobal(pos))
+        if chosen is rename_action:
+            self._rename_function(item)
+
+    def _rename_function(self, item):
+        address = item.data(0, Qt.ItemDataRole.UserRole)
+        original_name = item.data(1, Qt.ItemDataRole.UserRole) or item.text(0)
+        if address is None or self.current_artifact_id is None:
+            if hasattr(self, "log_view"):
+                self.log_view.append("[INFO] Rename requires an analyzed binary.")
+            return
+        current = item.text(0)
+        new_name, ok = QInputDialog.getText(self, "Rename Function", "New name:", text=current)
+        if not ok or not new_name.strip():
+            return
+        self.annotation_store.rename(self.current_artifact_id, address, new_name.strip())
+        item.setText(0, new_name.strip())
+        if hasattr(self, "log_view"):
+            self.log_view.append(f"[INFO] Renamed {original_name!r} -> {new_name.strip()!r}")
+
     def on_function_selected(self, item, _column=0):
         """Scroll the Disassembly view to the selected function's address."""
         try:
             addr_text = item.text(1)
             addr = int(addr_text, 16)
+            if hasattr(self, "references_panel"):
+                self.references_panel.show_address(addr)
             if hasattr(self.disassembly_view, 'scroll_to_address'):
                 self.disassembly_view.scroll_to_address(addr)
-                self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
+                self._show_legacy_workspace(); self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
             else:
                 from PyQt6.QtGui import QTextCursor
                 doc = self.disassembly_view
@@ -1854,7 +2214,7 @@ class MainWindow(QMainWindow):
                     cursor.setPosition(idx)
                     doc.setTextCursor(cursor)
                     doc.ensureCursorVisible()
-                    self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
+                    self._show_legacy_workspace(); self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
                 elif hasattr(self, 'log_view'):
                     self.log_view.append(f"[INFO] Address {addr_text} not in the disassembled range.")
         except Exception as e:
@@ -1865,9 +2225,11 @@ class MainWindow(QMainWindow):
         """Jump the Disassembly view to a virtual address (used by Security Audit)."""
         try:
             addr = int(addr)
+            if hasattr(self, "references_panel"):
+                self.references_panel.show_address(addr)
             if hasattr(self.disassembly_view, 'scroll_to_address'):
                 self.disassembly_view.scroll_to_address(addr)
-                self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
+                self._show_legacy_workspace(); self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
                 return
             doc = self.disassembly_view
             text = doc.toPlainText()
@@ -1880,7 +2242,7 @@ class MainWindow(QMainWindow):
                 cursor.setPosition(idx)
                 doc.setTextCursor(cursor)
                 doc.ensureCursorVisible()
-                self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
+                self._show_legacy_workspace(); self.analysis_tabs.setCurrentWidget(self._disassembly_tab)
             elif hasattr(self, 'log_view'):
                 self.log_view.append(f"[INFO] 0x{addr:x} not in the disassembled range.")
         except Exception as e:
@@ -2067,21 +2429,40 @@ class MainWindow(QMainWindow):
         export_action = QAction("Export Analysis", self)
         export_action.triggered.connect(self.export_analysis)
         file_menu.addAction(export_action)
-        
+
+        # Open Recent (Phase 016, 10.10) -- only shown once a desktop_manager
+        # exists; rebuilt lazily on each menu show so it always reflects the
+        # latest Workspace.recent_files.
+        if self.desktop_manager is not None:
+            self._open_recent_menu = file_menu.addMenu("Open Recent")
+            self._open_recent_menu.aboutToShow.connect(self._populate_open_recent_menu)
+
         file_menu.addSeparator()
         file_menu.addAction("Exit").triggered.connect(self.close)
-        
+
         # Analysis menu
         analysis_menu = menubar.addMenu("Analysis")
         reanalyze_action = QAction("Re-analyze with AI", self)
         reanalyze_action.triggered.connect(self.reanalyze_with_ai)
         analysis_menu.addAction(reanalyze_action)
-        
+
         # Add a menu action for full binary C decompilation
         full_c_action = QAction("Full Binary C Decompilation (RetDec/Ghidra)", self)
         full_c_action.triggered.connect(self.run_full_decompilation)
         analysis_menu.addAction(full_c_action)
-        
+
+        # Pipeline Workspace entries (Phase 016, 10.3/10.11) -- only shown
+        # once the Pipeline Workspace exists; "Generate Report" is always a
+        # separate, explicit action, never auto-run on Open File.
+        if self.desktop_manager is not None:
+            analysis_menu.addSeparator()
+            generate_action = QAction("Generate Report", self)
+            generate_action.triggered.connect(self._generate_report_from_menu)
+            analysis_menu.addAction(generate_action)
+            view_report_action = QAction("View Report", self)
+            view_report_action.triggered.connect(lambda: self._show_pipeline_destination("report"))
+            analysis_menu.addAction(view_report_action)
+
         # Tools menu
         tools_menu = menubar.addMenu("Tools")
         tools_menu.addAction("Configure MISP").triggered.connect(self.configure_misp)
@@ -2105,17 +2486,38 @@ class MainWindow(QMainWindow):
                     str(s.get('size', 0)),
                 ])
 
+        # Rename-resolved once, up front (Phase 016, 10.8's shared-overlay
+        # rule): every downstream consumer of `functions` in this method
+        # (the Functions tree, the References panel, Security Audit's "Used
+        # by" column) sees renamed names without its own rename-sync logic.
+        # The pre-rename name is preserved in `_original_name` for logging.
+        functions = [dict(fn) for fn in results.get('functions', [])]
+        for fn in functions:
+            fn['_original_name'] = str(fn.get('name', ''))
+            fn['name'] = self._resolve_function_name(
+                fn.get('address', 0), fn['_original_name'])
+
         # Populate the left-panel functions list (double-click navigates).
-        functions = results.get('functions', [])
         if hasattr(self, 'functions_tree'):
             self.functions_tree.clear()
             for fn in functions:
-                QTreeWidgetItem(self.functions_tree, [
+                address = fn.get('address', 0)
+                item = QTreeWidgetItem(self.functions_tree, [
                     str(fn.get('name', '')),
-                    f"{fn.get('address', 0):08x}",
+                    f"{address:08x}",
                 ])
+                item.setData(0, Qt.ItemDataRole.UserRole, address)
+                item.setData(1, Qt.ItemDataRole.UserRole, fn['_original_name'])
             if hasattr(self, 'log_view') and functions:
                 self.log_view.append(f"[INFO] Discovered {len(functions)} functions.")
+
+        # References & Relationships (Phase 016, 10.9) -- reindex for the
+        # newly analyzed binary.
+        if hasattr(self, 'references_panel'):
+            try:
+                self.references_panel.set_analysis(instructions, functions)
+            except Exception:
+                pass
 
         # Protection / packer report (and offer automated unpacking for UPX).
         if self.current_file_path and os.path.isfile(self.current_file_path):
@@ -2249,7 +2651,7 @@ class MainWindow(QMainWindow):
             self.security_audit_panel.set_context(
                 path=self.current_file_path,
                 sections=results.get('sections', []),
-                functions=results.get('functions', []),
+                functions=functions,  # rename-resolved (Phase 016, 10.8)
                 instructions=(self.program_model.instructions
                               if getattr(self, 'program_model', None) else []),
                 imports=results.get('imports', []),

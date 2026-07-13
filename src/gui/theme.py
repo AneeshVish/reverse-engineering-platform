@@ -229,6 +229,13 @@ QToolTip {{ background: {t.panel}; color: {t.text}; border: 1px solid {t.accent}
     border-radius: 6px; padding: 5px 8px; }}
 
 QFrame#Card {{ background: {t.panel}; border: 1px solid {t.border}; border-radius: 12px; }}
+
+QFrame#StatusStrip {{ background: {t.bg_alt}; border-bottom: 1px solid {t.border}; }}
+QLabel#StateOk {{ color: {t.ok}; }}
+QLabel#StateWarn {{ color: {t.warn}; }}
+QLabel#StateError {{ color: {t.error}; }}
+QLabel#StateBusy {{ color: {t.accent}; }}
+QLabel#StateDim {{ color: {t.text_dim}; }}
 """
 
 

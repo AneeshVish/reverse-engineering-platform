@@ -35,10 +35,10 @@ jobs:
         run: uv run reveng-codegen --verify-dirty --json
 
       - name: Ruff lint
-        run: uv run ruff check libs tools tests/engineering tests/packages packages/core-substrate packages/domain-producers packages/pass-engine packages/intermediate-representation packages/storage-evidence packages/static-analysis packages/knowledge-graph packages/reasoning packages/investigation packages/reporting packages/plugin-sdk
+        run: uv run ruff check libs tools tests/engineering tests/packages packages/core-substrate packages/domain-producers packages/pass-engine packages/intermediate-representation packages/storage-evidence packages/static-analysis packages/knowledge-graph packages/reasoning packages/investigation packages/reporting packages/plugin-sdk packages/public-api packages/desktop-sdk
 
       - name: Ruff format check
-        run: uv run ruff format --check libs tools tests/engineering tests/packages packages/core-substrate packages/domain-producers packages/pass-engine packages/intermediate-representation packages/storage-evidence packages/static-analysis packages/knowledge-graph packages/reasoning packages/investigation packages/reporting packages/plugin-sdk
+        run: uv run ruff format --check libs tools tests/engineering tests/packages packages/core-substrate packages/domain-producers packages/pass-engine packages/intermediate-representation packages/storage-evidence packages/static-analysis packages/knowledge-graph packages/reasoning packages/investigation packages/reporting packages/plugin-sdk packages/public-api packages/desktop-sdk
 
       - name: Pyright
         run: uv run pyright

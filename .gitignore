@@ -36,6 +36,11 @@ output_*.c
 projects/
 temp/
 
+# Phase 016 desktop-local runtime state (dev-mode writes these to repo root,
+# same pattern as config.json; user-local, never meant to be committed)
+annotations.json
+archived_projects.json
+
 # Captured live traffic — may contain real tokens/PII. NEVER commit.
 re_capture_*.jsonl
 *_capture_*.jsonl

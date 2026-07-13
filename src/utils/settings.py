@@ -109,6 +109,10 @@ class Settings:
             self.settings[category] = {}
         self.settings[category][key] = value
 
+    def update(self, category, values):
+        """Merge a dict of key/value pairs into ``category`` in one call."""
+        self.settings.setdefault(category, {}).update(values)
+
     def get_theme(self):
         return self.get("general", "theme", "Tokyo Night")
 

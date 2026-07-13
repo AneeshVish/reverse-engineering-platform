@@ -42,6 +42,7 @@ REQUIRED_PACKAGES = [
     "reporting",
     "plugin-sdk",
     "public-api",
+    "desktop-sdk",
     "deployment",
     "observability",
     "security",
@@ -133,9 +134,9 @@ ALLOWED_PACKAGE_EDGES: dict[str, set[str]] = {
         "reveng_knowledge_graph",
         "reveng_storage_evidence",
     },
-    # Engineering Phase 013: the plugin SDK is intentionally the only package
-    # permitted to integrate with every backend subsystem, exposing extension
-    # points without bypassing the platform managers.
+    # Engineering Phase 013: the plugin SDK is intentionally permitted to
+    # integrate with every backend subsystem, exposing extension points
+    # without bypassing the platform managers.
     "reveng_plugin_sdk": {
         "reveng_core_substrate",
         "reveng_domain_producers",
@@ -148,6 +149,30 @@ ALLOWED_PACKAGE_EDGES: dict[str, set[str]] = {
         "reveng_investigation",
         "reveng_reporting",
     },
+    # Engineering Phase 014: the public API is the platform's outward-facing
+    # service layer. It orchestrates the full ingestion-through-reporting
+    # pipeline by calling the same backend managers the plugin SDK integrates
+    # with, plus the plugin SDK itself for read-only plugin/capability
+    # listing. Intermediate-representation is included because the
+    # orchestrator's own result type carries a typed IRModule reference
+    # (mirroring storage-evidence's and knowledge-graph's precedent).
+    "reveng_public_api": {
+        "reveng_domain_producers",
+        "reveng_pass_engine",
+        "reveng_intermediate_representation",
+        "reveng_storage_evidence",
+        "reveng_static_analysis",
+        "reveng_knowledge_graph",
+        "reveng_reasoning",
+        "reveng_investigation",
+        "reveng_reporting",
+        "reveng_plugin_sdk",
+    },
+    # Engineering Phase 015: the desktop integration library is a client of
+    # the public API service layer only -- it talks to reveng_public_api
+    # over HTTP and imports its Pydantic schema classes directly as typed
+    # response shapes.
+    "reveng_desktop_sdk": {"reveng_public_api"},
 }
 
 

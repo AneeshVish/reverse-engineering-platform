@@ -372,3 +372,103 @@ def test_plugin_sdk_forbidden_edges(tmp_path: Path) -> None:
     assert any("sibling package import reveng_observability" in v for v in violations)
     assert any("imports app reveng_desktop" in v for v in violations)
     assert any("sibling package import reveng_plugin_sdk" in v for v in violations)
+
+
+_PUBLIC_API_BACKENDS = (
+    "domain-producers",
+    "pass-engine",
+    "intermediate-representation",
+    "storage-evidence",
+    "static-analysis",
+    "knowledge-graph",
+    "reasoning",
+    "investigation",
+    "reporting",
+    "plugin-sdk",
+)
+
+
+def test_public_api_allowed_edges(tmp_path: Path) -> None:
+    # Engineering Phase 014 allowlists public-api -> every backend package plus
+    # the plugin SDK (for read-only plugin listing).
+    _package(tmp_path, "core-substrate", "x = 1\n")
+    for name in _PUBLIC_API_BACKENDS:
+        _package(tmp_path, name, "v = 1\n")
+    imports = "".join(f"import reveng_{n.replace('-', '_')}\n" for n in _PUBLIC_API_BACKENDS)
+    _package(tmp_path, "public-api", imports)
+    result = check_dep_001(tmp_path)
+    assert result.ok, result.context
+
+
+def test_public_api_forbidden_edges(tmp_path: Path) -> None:
+    # No backend or the plugin SDK may import public-api, and public-api may not
+    # reach apps or the other upper-tier reserved siblings (deployment /
+    # observability / security / platform-validation).
+    _package(tmp_path, "core-substrate", "x = 1\n")
+    _package(tmp_path, "deployment", "d = 1\n")
+    _package(tmp_path, "observability", "o = 1\n")
+    _package(tmp_path, "security", "s = 1\n")
+    _package(tmp_path, "platform-validation", "p = 1\n")
+    # reverse edges (forbidden): nothing lower, including the plugin SDK, may
+    # import public-api
+    _package(tmp_path, "reporting", "import reveng_public_api\n")
+    _package(tmp_path, "plugin-sdk", "import reveng_public_api\n")
+    _package(
+        tmp_path,
+        "public-api",
+        "import reveng_deployment\n"
+        "import reveng_observability\n"
+        "import reveng_security\n"
+        "import reveng_platform_validation\n"
+        "import reveng_desktop\n",
+    )
+    result = check_dep_001(tmp_path)
+    assert not result.ok
+    violations = result.context["violations"]
+    assert any("sibling package import reveng_deployment" in v for v in violations)
+    assert any("sibling package import reveng_observability" in v for v in violations)
+    assert any("sibling package import reveng_security" in v for v in violations)
+    assert any("sibling package import reveng_platform_validation" in v for v in violations)
+    assert any("imports app reveng_desktop" in v for v in violations)
+    assert any("sibling package import reveng_public_api" in v for v in violations)
+
+
+def test_desktop_sdk_allowed_edges(tmp_path: Path) -> None:
+    # Engineering Phase 015 allowlists desktop-sdk -> public-api only.
+    _package(tmp_path, "core-substrate", "x = 1\n")
+    _package(tmp_path, "public-api", "v = 1\n")
+    _package(tmp_path, "desktop-sdk", "import reveng_public_api\n")
+    result = check_dep_001(tmp_path)
+    assert result.ok, result.context
+
+
+def test_desktop_sdk_forbidden_edges(tmp_path: Path) -> None:
+    # Nothing may import desktop-sdk (nothing lower depends on it), and
+    # desktop-sdk may not reach apps or the other upper-tier reserved
+    # siblings (deployment / observability / security / platform-validation).
+    _package(tmp_path, "core-substrate", "x = 1\n")
+    _package(tmp_path, "deployment", "d = 1\n")
+    _package(tmp_path, "observability", "o = 1\n")
+    _package(tmp_path, "security", "s = 1\n")
+    _package(tmp_path, "platform-validation", "p = 1\n")
+    _package(tmp_path, "public-api", "import reveng_desktop_sdk\n")  # forbidden reverse edge
+    _package(
+        tmp_path,
+        "desktop-sdk",
+        "import reveng_deployment\n"
+        "import reveng_observability\n"
+        "import reveng_security\n"
+        "import reveng_platform_validation\n"
+        "import reveng_desktop\n"
+        "import reveng_api\n",
+    )
+    result = check_dep_001(tmp_path)
+    assert not result.ok
+    violations = result.context["violations"]
+    assert any("sibling package import reveng_deployment" in v for v in violations)
+    assert any("sibling package import reveng_observability" in v for v in violations)
+    assert any("sibling package import reveng_security" in v for v in violations)
+    assert any("sibling package import reveng_platform_validation" in v for v in violations)
+    assert any("imports app reveng_desktop" in v for v in violations)
+    assert any("imports app reveng_api" in v for v in violations)
+    assert any("sibling package import reveng_desktop_sdk" in v for v in violations)

@@ -1,13 +1,19 @@
 [project]
 name = "reveng-api"
 version = "0.1.0"
-description = "RevENG reserved package — ownership only"
+description = "RevENG public API process entrypoint (Impl Spec 010)"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "reveng-public-api",
+    "uvicorn",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+reveng-public-api = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/reveng_api"]

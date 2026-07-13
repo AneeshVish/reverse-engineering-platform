@@ -17,11 +17,15 @@ dependencies = [
     "requests>=2.28.0",
     "openai>=1.0.0",
     "qtawesome>=1.2.0",
+    "reveng-desktop-sdk",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+reveng-desktop-sdk = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/reveng_desktop"]

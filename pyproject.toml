@@ -28,6 +28,7 @@ dependencies = [
     "reveng-reporting",
     "reveng-plugin-sdk",
     "reveng-public-api",
+    "reveng-desktop-sdk",
     "reveng-deployment",
     "reveng-observability",
     "reveng-security",
@@ -43,6 +44,7 @@ dev = [
     "ruff>=0.6",
     "pyright>=1.1",
     "pre-commit>=3.7",
+    "httpx>=0.27",
 ]
 packaging = [
     "pyinstaller>=6.0",
@@ -68,6 +70,7 @@ members = [
     "tools/workspace_build",
     "packages/core-substrate",
     "packages/deployment",
+    "packages/desktop-sdk",
     "packages/domain-producers",
     "packages/intermediate-representation",
     "packages/static-analysis",
@@ -111,6 +114,7 @@ reveng-investigation = { workspace = true }
 reveng-reporting = { workspace = true }
 reveng-plugin-sdk = { workspace = true }
 reveng-public-api = { workspace = true }
+reveng-desktop-sdk = { workspace = true }
 reveng-deployment = { workspace = true }
 reveng-observability = { workspace = true }
 reveng-security = { workspace = true }
@@ -158,6 +162,8 @@ include = [
     "packages/investigation/src",
     "packages/reporting/src",
     "packages/plugin-sdk/src",
+    "packages/public-api/src",
+    "packages/desktop-sdk/src",
 ]
 exclude = [".venv", "src", "apps/reveng-desktop"]
 pythonVersion = "3.12"

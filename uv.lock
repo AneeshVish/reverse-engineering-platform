@@ -20,6 +20,7 @@ members = [
     "reveng-core-substrate",
     "reveng-deployment",
     "reveng-desktop",
+    "reveng-desktop-sdk",
     "reveng-domain-producers",
     "reveng-errors",
     "reveng-intermediate-representation",
@@ -52,6 +53,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/7e/f8/97fdf103f38fed6792a1601dbc16cc8aac56e7459a9fff08c812d8ae177a/altgraph-0.17.5.tar.gz", hash = "sha256:c87b395dd12fabde9c99573a9749d67da8d29ef9de0125c7f536699b4a9bc9e7", size = 48428, upload-time = "2025-11-21T20:35:50.583Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/ba/000a1996d4308bc65120167c21241a3b205464a2e0b58deda26ae8ac21d1/altgraph-0.17.5-py2.py3-none-any.whl", hash = "sha256:f3a22400bce1b0c701683820ac4f3b159cd301acab067c51c653e06961600597", size = 21228, upload-time = "2025-11-21T20:35:49.444Z" },
+]
+
+[[package]]
+name = "annotated-doc"
+version = "0.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/ba/046ceea27344560984e26a590f90bc7f4a75b06701f653222458922b558c/annotated_doc-0.0.4.tar.gz", hash = "sha256:fbcda96e87e9c92ad167c2e53839e57503ecfda18804ea28102353485033faa4", size = 7288, upload-time = "2025-11-10T22:07:42.062Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/d3/26bf1008eb3d2daa8ef4cacc7f3bfdc11818d111f7e2d0201bc6e3b49d45/annotated_doc-0.0.4-py3-none-any.whl", hash = "sha256:571ac1dc6991c450b25a9c2d84a3705e2ae7a53467b5d111c24fa8baabbed320", size = 5303, upload-time = "2025-11-10T22:07:40.673Z" },
 ]
 
 [[package]]
@@ -174,6 +184,18 @@ wheels = [
 ]
 
 [[package]]
+name = "click"
+version = "8.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/76/d4/81420972a676e8ffea40450d8c8c92943e7218a78fe9b64359836cc9876b/click-8.4.2.tar.gz", hash = "sha256:9a6cea6e60b17ebe0a44c5cc636d94f09bd66142c1cd7d8b4cd731c4917a15f6", size = 338000, upload-time = "2026-06-24T17:45:15.148Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/e2/79c688af8b210d232694e31e59da9f6ec747bae31c3f5946e4e9b98860d5/click-8.4.2-py3-none-any.whl", hash = "sha256:e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76", size = 119243, upload-time = "2026-06-24T17:45:13.73Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -273,6 +295,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
+]
+
+[[package]]
+name = "fastapi"
+version = "0.139.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/af/a5f50ccfa659ec1802cb4ca842c23f06d906a8cc9aef6016a2caeea3d4ed/fastapi-0.139.0.tar.gz", hash = "sha256:99ab7b2d92223c76d6cf10757ab3f89d45b38267fc20b2a136cf02f6beac3145", size = 423016, upload-time = "2026-07-01T16:35:33.436Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/7c/8e3c6ad324ea5cb36604fc3f968554887891c316d9dfde57761611d907ad/fastapi-0.139.0-py3-none-any.whl", hash = "sha256:cf15e1e9e667ddb0ad63811e60bd11390d1aac838ca4a7a23f421807b2308189", size = 130339, upload-time = "2026-07-01T16:35:32.19Z" },
 ]
 
 [[package]]
@@ -1211,6 +1249,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-multipart"
+version = "0.0.32"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz", hash = "sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e", size = 46881, upload-time = "2026-06-04T16:18:58.647Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl", hash = "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23", size = 30042, upload-time = "2026-06-04T16:18:57.319Z" },
+]
+
+[[package]]
 name = "pywin32-ctypes"
 version = "0.2.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1308,6 +1355,16 @@ wheels = [
 name = "reveng-api"
 version = "0.1.0"
 source = { editable = "apps/reveng-api" }
+dependencies = [
+    { name = "reveng-public-api" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "reveng-public-api", editable = "packages/public-api" },
+    { name = "uvicorn" },
+]
 
 [[package]]
 name = "reveng-bootstrap"
@@ -1425,6 +1482,7 @@ dependencies = [
     { name = "pyqtgraph" },
     { name = "qtawesome" },
     { name = "requests" },
+    { name = "reveng-desktop-sdk" },
 ]
 
 [package.metadata]
@@ -1442,6 +1500,32 @@ requires-dist = [
     { name = "pyqtgraph", specifier = ">=0.13.0" },
     { name = "qtawesome", specifier = ">=1.2.0" },
     { name = "requests", specifier = ">=2.28.0" },
+    { name = "reveng-desktop-sdk", editable = "packages/desktop-sdk" },
+]
+
+[[package]]
+name = "reveng-desktop-sdk"
+version = "0.1.0"
+source = { editable = "packages/desktop-sdk" }
+dependencies = [
+    { name = "httpx" },
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-errors" },
+    { name = "reveng-logging" },
+    { name = "reveng-public-api" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx" },
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-public-api", editable = "packages/public-api" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
 ]
 
 [[package]]
@@ -1640,6 +1724,48 @@ requires-dist = [
 name = "reveng-public-api"
 version = "0.1.0"
 source = { editable = "packages/public-api" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "python-multipart" },
+    { name = "reveng-config" },
+    { name = "reveng-core-substrate" },
+    { name = "reveng-domain-producers" },
+    { name = "reveng-errors" },
+    { name = "reveng-intermediate-representation" },
+    { name = "reveng-investigation" },
+    { name = "reveng-knowledge-graph" },
+    { name = "reveng-logging" },
+    { name = "reveng-pass-engine" },
+    { name = "reveng-plugin-sdk" },
+    { name = "reveng-reasoning" },
+    { name = "reveng-reporting" },
+    { name = "reveng-static-analysis" },
+    { name = "reveng-storage-evidence" },
+    { name = "reveng-types" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "python-multipart" },
+    { name = "reveng-config", editable = "libs/reveng-config" },
+    { name = "reveng-core-substrate", editable = "packages/core-substrate" },
+    { name = "reveng-domain-producers", editable = "packages/domain-producers" },
+    { name = "reveng-errors", editable = "libs/reveng-errors" },
+    { name = "reveng-intermediate-representation", editable = "packages/intermediate-representation" },
+    { name = "reveng-investigation", editable = "packages/investigation" },
+    { name = "reveng-knowledge-graph", editable = "packages/knowledge-graph" },
+    { name = "reveng-logging", editable = "libs/reveng-logging" },
+    { name = "reveng-pass-engine", editable = "packages/pass-engine" },
+    { name = "reveng-plugin-sdk", editable = "packages/plugin-sdk" },
+    { name = "reveng-reasoning", editable = "packages/reasoning" },
+    { name = "reveng-reporting", editable = "packages/reporting" },
+    { name = "reveng-static-analysis", editable = "packages/static-analysis" },
+    { name = "reveng-storage-evidence", editable = "packages/storage-evidence" },
+    { name = "reveng-types", editable = "libs/reveng-types" },
+]
 
 [[package]]
 name = "reveng-reasoning"
@@ -1832,6 +1958,7 @@ dependencies = [
     { name = "reveng-core-substrate" },
     { name = "reveng-deployment" },
     { name = "reveng-desktop" },
+    { name = "reveng-desktop-sdk" },
     { name = "reveng-domain-producers" },
     { name = "reveng-errors" },
     { name = "reveng-intermediate-representation" },
@@ -1858,6 +1985,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "pre-commit" },
     { name = "pyright" },
     { name = "pytest" },
@@ -1877,6 +2005,7 @@ requires-dist = [
     { name = "reveng-core-substrate", editable = "packages/core-substrate" },
     { name = "reveng-deployment", editable = "packages/deployment" },
     { name = "reveng-desktop", editable = "apps/reveng-desktop" },
+    { name = "reveng-desktop-sdk", editable = "packages/desktop-sdk" },
     { name = "reveng-domain-producers", editable = "packages/domain-producers" },
     { name = "reveng-errors", editable = "libs/reveng-errors" },
     { name = "reveng-intermediate-representation", editable = "packages/intermediate-representation" },
@@ -1903,6 +2032,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.27" },
     { name = "pre-commit", specifier = ">=3.7" },
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=8.0" },
@@ -1986,6 +2116,19 @@ wheels = [
 ]
 
 [[package]]
+name = "starlette"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/eb/e3/7c1dc7381d9f8ab7d854328ebfa884e62cb3f3d8549ddfd37c7814f42afa/starlette-1.3.1.tar.gz", hash = "sha256:05d0213193f2fbaae60e2ecb593b4add4262ad4e46536b54abe36f11a71724e0", size = 2703240, upload-time = "2026-06-12T09:23:11.602Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/bb/2799cc2ede3ed41131f8975621e7213dfc7ef4acbbaadfa440f32500c370/starlette-1.3.1-py3-none-any.whl", hash = "sha256:c7372aae11c3c3f26a42df7bd626cec2f47d03483d261d369516a615a53714c6", size = 73632, upload-time = "2026-06-12T09:23:10.017Z" },
+]
+
+[[package]]
 name = "tqdm"
 version = "4.68.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2034,6 +2177,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
+]
+
+[[package]]
+name = "uvicorn"
+version = "0.51.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+    { name = "h11" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a2/65/b7c6c443ccc58678c91e1e973bbe2a878591538655d6e1d47f24ba1c51f3/uvicorn-0.51.0.tar.gz", hash = "sha256:f6f4b69b657c312f516dd2d268ab9ae6f254b11e4bac504f37b2ab58b24dd0b0", size = 94412, upload-time = "2026-07-08T10:59:05.962Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/ec/dbb7e5a6b91f86bfb9eb7d2988a2730907b6a729875b949c7f022e8b88fa/uvicorn-0.51.0-py3-none-any.whl", hash = "sha256:5d38af6cd620f2ae3849fb44fd4879e0890aa1febe8d47eb355fb45d93fe6a5b", size = 73219, upload-time = "2026-07-08T10:59:04.44Z" },
 ]
 
 [[package]]

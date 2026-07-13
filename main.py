@@ -48,8 +48,18 @@ def main():
     theme_mod.load_bundled_fonts(app)
     theme_mod.apply_theme(app, settings.get_theme())
 
+    # Phase 016: construct the desktop-SDK manager once, up front, and hand
+    # it to MainWindow. Fully optional -- if the SDK isn't importable for
+    # any reason, the legacy app still launches unchanged (10.12).
+    desktop_manager = None
+    try:
+        from reveng_desktop_sdk import build_desktop_manager
+        desktop_manager = build_desktop_manager()
+    except Exception as e:
+        logger.warning("Pipeline Workspace unavailable (desktop SDK): %s", e)
+
     # Create main window
-    window = MainWindow(settings, plugin_manager)
+    window = MainWindow(settings, plugin_manager, desktop_manager=desktop_manager)
     window.show()
     
     # Start the event loop

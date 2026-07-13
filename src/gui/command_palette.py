@@ -1,4 +1,6 @@
-"""A VS Code-style command palette (⌘K): fuzzy-filter and run registered actions."""
+"""A VS Code-style command palette (Ctrl+K): fuzzy-filter and run results
+from a ``SearchProviderRegistry`` (functions, commands, reports, extensions,
+and -- in later phases -- whatever else registers a provider)."""
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -7,10 +9,13 @@ from PyQt6.QtWidgets import (
 
 
 class CommandPalette(QDialog):
-    def __init__(self, actions, parent=None):
-        """actions: list of (label, callback)."""
+    def __init__(self, registry_or_actions, parent=None):
+        """``registry_or_actions``: a ``SearchProviderRegistry`` (preferred),
+        or (for backward compatibility) a flat list of ``(label, callback)``
+        tuples, wrapped in a single-provider registry automatically."""
+
         super().__init__(parent)
-        self._actions = list(actions)
+        self._registry = self._coerce_registry(registry_or_actions)
         self.setWindowFlags(Qt.WindowType.Popup)
         self.setObjectName("Card")
         self.setMinimumWidth(520)
@@ -20,7 +25,7 @@ class CommandPalette(QDialog):
         layout.setSpacing(8)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Type a command…  (Enter to run, Esc to close)")
+        self.search.setPlaceholderText("Type to search…  (Enter to run, Esc to close)")
         self.search.textChanged.connect(self._refilter)
         self.search.returnPressed.connect(self._run_current)
         layout.addWidget(self.search)
@@ -34,21 +39,22 @@ class CommandPalette(QDialog):
         self.search.setFocus()
 
     @staticmethod
-    def _matches(query, label):
-        """Subsequence fuzzy match (chars of query appear in order in label)."""
-        if not query:
-            return True
-        q = query.lower()
-        it = iter(label.lower())
-        return all(ch in it for ch in q)
+    def _coerce_registry(registry_or_actions):
+        from src.gui.search_providers import CommandProvider, SearchProviderRegistry
+
+        if isinstance(registry_or_actions, SearchProviderRegistry):
+            return registry_or_actions
+        registry = SearchProviderRegistry()
+        registry.register(CommandProvider(list(registry_or_actions)))
+        return registry
 
     def _refilter(self, text):
         self.list.clear()
-        for label, cb in self._actions:
-            if self._matches(text, label):
-                item = QListWidgetItem(label)
-                item.setData(Qt.ItemDataRole.UserRole, cb)
-                self.list.addItem(item)
+        for result in self._registry.search(text):
+            label = f"[{result.result_type}] {result.display_text}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, result.callback)
+            self.list.addItem(item)
         if self.list.count():
             self.list.setCurrentRow(0)
 
