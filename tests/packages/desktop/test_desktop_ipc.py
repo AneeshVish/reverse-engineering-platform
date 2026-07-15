@@ -29,3 +29,11 @@ def test_http_ipc_delegates_to_client() -> None:
     assert ipc.plugins()
     assert ipc.health().state == "healthy"
     assert ipc.job_status(submission.job_id).state == "completed"
+
+    # Phase 017 additions delegate through the same seam.
+    assert ipc.get_job(submission.job_id).report_available is True
+    assert any(j.job_id == submission.job_id for j in ipc.list_jobs().jobs)
+    assert ipc.get_investigation(submission.job_id).id
+    assert ipc.get_evidence(submission.job_id).evidence
+    assert isinstance(ipc.get_reasoning(submission.job_id).inferences, list)
+    assert ipc.get_graph(submission.job_id).nodes

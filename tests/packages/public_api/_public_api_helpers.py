@@ -7,15 +7,22 @@ test suite already follows.
 
 from __future__ import annotations
 
+import threading
+
 from fastapi import FastAPI
+from reveng_core_substrate import Application
 from reveng_domain_producers import ProducerManager, ProducerRegistry
 from reveng_investigation import InvestigationManager
 from reveng_knowledge_graph import KnowledgeGraphManager
+from reveng_plugin_sdk import build_plugin_manager
 from reveng_public_api import (
+    PUBLIC_API_DEFAULTS,
+    AllowAllAuthHook,
     FixedClock,
     JobManager,
     MonotonicIdProvider,
     PipelineOrchestrator,
+    PublicApiConfig,
     ServiceContext,
     build_service,
     create_app,
@@ -110,6 +117,86 @@ def make_recording_orchestrator(order: list[str]) -> PipelineOrchestrator:
         investigation=investigation,
         reporting=reporting,
     )
+
+
+class _GatedStaticAnalysis(StaticAnalysisManager):
+    """A real StaticAnalysisManager whose analyze() blocks on a gate --
+    lets cancellation tests deterministically catch a job mid-flight."""
+
+    def __init__(self, gate: threading.Event) -> None:
+        super().__init__()
+        self._gate = gate
+
+    def analyze(self, request, *, storage=None):  # type: ignore[override]
+        self._gate.wait(timeout=5.0)
+        return super().analyze(request, storage=storage)
+
+
+def build_gated_service(
+    *,
+    max_workers: int = 4,
+    id_provider: MonotonicIdProvider | None = None,
+    clock: FixedClock | None = None,
+) -> tuple[ServiceContext, threading.Event]:
+    """A real, fully-wired service whose static-analysis phase blocks until
+    the returned gate is set. Used by cancellation tests: a job held here is
+    reliably RUNNING (past the producer phase boundary, not yet past
+    static-analysis), and setting the gate lets it reach the next boundary
+    where a cooperative cancellation is observed."""
+
+    gate = threading.Event()
+    resolved_clock = clock or FixedClock()
+
+    producers = ProducerManager(ProducerRegistry())
+    static_analysis = _GatedStaticAnalysis(gate)
+    storage = StorageManager()
+    knowledge_graph = KnowledgeGraphManager()
+    reasoning = ReasoningManager()
+    investigation = InvestigationManager()
+    reporting = ReportingManager()
+    plugin_manager = build_plugin_manager()
+
+    orchestrator = PipelineOrchestrator(
+        producers=producers,
+        static_analysis=static_analysis,
+        storage=storage,
+        knowledge_graph=knowledge_graph,
+        reasoning=reasoning,
+        investigation=investigation,
+        reporting=reporting,
+        clock=resolved_clock,
+    )
+    job_manager = JobManager(
+        orchestrator,
+        max_workers=max_workers,
+        id_provider=id_provider or MonotonicIdProvider(),
+        clock=resolved_clock,
+    )
+
+    application = Application()
+    for component in (
+        producers,
+        static_analysis,
+        storage,
+        knowledge_graph,
+        reasoning,
+        investigation,
+        reporting,
+        plugin_manager,
+        job_manager,
+    ):
+        application.register_component(component)
+    application.initialize()
+
+    service = ServiceContext(
+        application=application,
+        orchestrator=orchestrator,
+        job_manager=job_manager,
+        plugin_manager=plugin_manager,
+        auth_hook=AllowAllAuthHook(),
+        config=PublicApiConfig(values={**PUBLIC_API_DEFAULTS, "job_pool_size": max_workers}),
+    )
+    return service, gate
 
 
 class _FailingStaticAnalysis(StaticAnalysisManager):

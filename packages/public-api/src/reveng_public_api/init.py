@@ -82,6 +82,7 @@ def build_service(
         reasoning=reasoning,
         investigation=investigation,
         reporting=reporting,
+        clock=clock,
     )
     job_manager = JobManager(
         orchestrator,

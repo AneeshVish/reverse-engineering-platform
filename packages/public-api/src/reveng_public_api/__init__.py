@@ -37,14 +37,22 @@ from .errors import (
 from .identifiers import FixedClock, MonotonicIdProvider, SystemClock
 from .init import ServiceContext, build_service
 from .job_manager import JobManager
-from .jobs import Job, JobState
+from .jobs import Job, JobState, PhaseTiming, PipelinePhase
 from .orchestrator import PipelineOrchestrator, PipelineResult
 from .plugins_view import list_plugins
 from .schemas import (
+    EvidenceResponse,
+    GraphResponse,
     HealthResponse,
+    InvestigationResponse,
+    JobDetail,
+    JobListResponse,
     JobStatusResponse,
     JobSubmitResponse,
+    JobSummary,
+    PhaseTimingModel,
     PluginSummary,
+    ReasoningResponse,
     ReportResponse,
     UploadResponse,
 )
@@ -65,6 +73,8 @@ __all__ = [
     "JobManager",
     "Job",
     "JobState",
+    "PipelinePhase",
+    "PhaseTiming",
     # identity / time (the scoped non-determinism exception)
     "ClockProtocol",
     "IdProvider",
@@ -82,9 +92,21 @@ __all__ = [
     "UploadResponse",
     "JobSubmitResponse",
     "JobStatusResponse",
+    "JobSummary",
+    "JobDetail",
+    "JobListResponse",
+    "PhaseTimingModel",
     "ReportResponse",
     "PluginSummary",
     "HealthResponse",
+    # schemas -- Phase 017 query routes (each mirrors its backend package's
+    # own canonical serializer JSON shape; nested submodels are internal
+    # composition details of these top-level response models, not
+    # separately exported)
+    "InvestigationResponse",
+    "EvidenceResponse",
+    "ReasoningResponse",
+    "GraphResponse",
     # config
     "PublicApiConfig",
     "load_public_api_config",

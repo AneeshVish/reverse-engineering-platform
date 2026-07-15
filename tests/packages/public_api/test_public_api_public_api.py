@@ -1,8 +1,10 @@
-"""Invariant: the Phase 014 public API is frozen.
+"""Invariant: the public API is frozen.
 
 Pins ``reveng_public_api.__all__`` against an explicit snapshot so any
-addition or removal is a deliberate, reviewed change. Later phases extend it
-additively.
+addition or removal is a deliberate, reviewed change. ``PHASE_014_PUBLIC_API``
+is the original Phase 014 freeze point; ``PHASE_017_ADDITIONS`` is what Phase
+017 (Pipeline Query API) added on top of it, additively -- nothing from Phase
+014 was removed or renamed.
 """
 
 from __future__ import annotations
@@ -51,9 +53,32 @@ PHASE_014_PUBLIC_API = frozenset(
     }
 )
 
+PHASE_017_ADDITIONS = frozenset(
+    {
+        "PipelinePhase",
+        "PhaseTiming",
+        "JobSummary",
+        "JobDetail",
+        "JobListResponse",
+        "PhaseTimingModel",
+        "InvestigationResponse",
+        "EvidenceResponse",
+        "ReasoningResponse",
+        "GraphResponse",
+    }
+)
+
+PHASE_017_PUBLIC_API = PHASE_014_PUBLIC_API | PHASE_017_ADDITIONS
+
 
 def test_public_api_matches_snapshot() -> None:
-    assert frozenset(reveng_public_api.__all__) == PHASE_014_PUBLIC_API
+    assert frozenset(reveng_public_api.__all__) == PHASE_017_PUBLIC_API
+
+
+def test_phase_014_surface_is_unchanged() -> None:
+    """No Phase 014 export was removed or renamed -- Phase 017 is additive-only."""
+
+    assert PHASE_014_PUBLIC_API <= frozenset(reveng_public_api.__all__)
 
 
 def test_all_entries_are_importable() -> None:
@@ -63,4 +88,4 @@ def test_all_entries_are_importable() -> None:
 
 def test_all_has_no_duplicates() -> None:
     assert len(reveng_public_api.__all__) == len(set(reveng_public_api.__all__))
-    assert len(reveng_public_api.__all__) == 37
+    assert len(reveng_public_api.__all__) == 47

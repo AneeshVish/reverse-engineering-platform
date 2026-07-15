@@ -12,10 +12,16 @@ from pathlib import Path
 
 from reveng_core_substrate import HealthResult, HealthState
 from reveng_public_api import (
+    EvidenceResponse,
+    GraphResponse,
     HealthResponse,
+    InvestigationResponse,
+    JobDetail,
+    JobListResponse,
     JobStatusResponse,
     JobSubmitResponse,
     PluginSummary,
+    ReasoningResponse,
     ReportResponse,
 )
 
@@ -122,11 +128,64 @@ class DesktopManager:
         self._service.ensure_connected()
         return self._ipc.job_status(job_id)
 
+    def get_job(self, job_id: str) -> JobDetail:
+        self._service.ensure_connected()
+        return self._ipc.get_job(job_id)
+
+    def list_jobs(
+        self,
+        *,
+        state: str | None = None,
+        source_ref: str | None = None,
+        artifact_ref: str | None = None,
+        created_after: float | None = None,
+        created_before: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> JobListResponse:
+        self._service.ensure_connected()
+        return self._ipc.list_jobs(
+            state=state,
+            source_ref=source_ref,
+            artifact_ref=artifact_ref,
+            created_after=created_after,
+            created_before=created_before,
+            limit=limit,
+            offset=offset,
+        )
+
+    def cancel_job(self, job_id: str) -> JobDetail:
+        self._service.ensure_connected()
+        return self._ipc.cancel_job(job_id)
+
     def fetch_report(self, job_id: str) -> ReportResponse:
         self._service.ensure_connected()
         report = self._ipc.job_report(job_id)
         self._session.select_report(job_id)
         return report
+
+    def get_investigation(self, job_id: str) -> InvestigationResponse:
+        self._service.ensure_connected()
+        return self._ipc.get_investigation(job_id)
+
+    def get_evidence(self, job_id: str) -> EvidenceResponse:
+        self._service.ensure_connected()
+        return self._ipc.get_evidence(job_id)
+
+    def get_reasoning(self, job_id: str) -> ReasoningResponse:
+        self._service.ensure_connected()
+        return self._ipc.get_reasoning(job_id)
+
+    def get_graph(
+        self,
+        job_id: str,
+        *,
+        limit: int | None = None,
+        depth: int | None = None,
+        node_types: str | None = None,
+    ) -> GraphResponse:
+        self._service.ensure_connected()
+        return self._ipc.get_graph(job_id, limit=limit, depth=depth, node_types=node_types)
 
     def plugins(self) -> list[PluginSummary]:
         self._service.ensure_connected()

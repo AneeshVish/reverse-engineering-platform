@@ -1,7 +1,7 @@
 # reveng-desktop-sdk
 
 **Owner:** Engineering Phase 015 — Desktop Integration / IPC
-**Status:** Implemented (Engineering Phase 015)
+**Status:** Implemented (Engineering Phase 015; extended additively by Engineering Phase 017 — Pipeline Query API)
 **Layer:** Desktop-facing integration library; typed client + local UI-adjacent state models over the public API service.
 
 This package connects a desktop application to the Phase-014 public API
@@ -11,13 +11,20 @@ everything goes through the public API's REST endpoints.
 
 ## What it exposes
 
-- `DesktopClient` — a typed, sync HTTP client over the six public-API
-  routes: `upload()`, `submit_job()`, `job_status()`, `job_report()`,
-  `plugins()`, `health()`, plus `poll_job()` (a bounded sleep-loop until a
-  job reaches a terminal state).
+- `DesktopClient` — a typed, sync HTTP client over the public-API routes:
+  `upload()`, `submit_job()`, `job_status()`, `job_report()`, `plugins()`,
+  `health()`, plus `poll_job()` (a bounded sleep-loop until a job reaches a
+  terminal state — `completed`, `failed`, or `cancelled`). Engineering Phase
+  017 added `get_job()` (richer detail than `job_status()`, which is kept
+  unchanged for compatibility), `list_jobs()`, `cancel_job()`, and
+  `get_investigation()`/`get_evidence()`/`get_reasoning()`/`get_graph()` —
+  each a 1:1 mirror of the matching public-API route, returning that route's
+  own `reveng_public_api` response model directly (this package re-declares
+  no parallel DTOs).
 - `HttpIPC` — the desktop IPC abstraction; pure delegation to
   `DesktopClient`, wrapping the `IPCProtocol` seam a later phase could
-  implement over a different transport.
+  implement over a different transport. Mirrors every `DesktopClient` method,
+  including the Phase 017 additions.
 - `DesktopService` — service lifecycle: attaches to a reachable service, or
   (if configured) self-manages a local process; `ensure_connected()` is the
   "automatically reconnects" behavior.
@@ -26,7 +33,10 @@ everything goes through the public API's REST endpoints.
   persisted `Workspace`/`Preferences`).
 - `DesktopManager` — the composition root: `open_project()`,
   `close_project()`, `submit_artifact()`, `refresh_job()`, `fetch_report()`,
-  `plugins()`, `health()`/`remote_health()`.
+  `plugins()`, `health()`/`remote_health()`, and the Phase 017 additions
+  `get_job()`, `list_jobs()`, `cancel_job()`, `get_investigation()`,
+  `get_evidence()`, `get_reasoning()`, `get_graph()` — each calling
+  `ensure_connected()` first, matching every other remote-operation method.
 
 ## Dependency rules
 
